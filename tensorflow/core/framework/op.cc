@@ -99,12 +99,6 @@ Status OpRegistry::LookUpSlow(const string& op_type_name,
     if (first_unregistered) {
       OpList op_list;
       Export(true, &op_list);
-      if (VLOG_IS_ON(3)) {
-        LOG(INFO) << "All registered Ops:";
-        for (const auto& op : op_list.op()) {
-          LOG(INFO) << SummarizeOpDef(op);
-        }
-      }
     }
     Status status = errors::NotFound(
         "Op type not registered '", op_type_name, "' in binary running on ",

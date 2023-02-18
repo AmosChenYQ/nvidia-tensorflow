@@ -181,6 +181,12 @@ void XlaOpRegistry::RegisterCompilationKernels() {
   registry.jit_kernels_registered_ = true;
 
   OpRegistryInterface* op_registry = OpRegistry::Global();
+  std::vector<string> op_registry_backends_info;
+  for (auto& backend : registry.backends_) {
+    op_registry_backends_info.push_back(backend.first);
+  }
+  VLOG(3) << "XLA op registry may have backends: "
+          << absl::StrJoin(op_registry_backends_info, ", ");
   // Order of op registration:
   // The goal is to allow the co-existence of backend-specific kernels and
   // generic kernels. To achieve this, we enforce the following order of
@@ -318,8 +324,6 @@ void XlaOpRegistry::RegisterCompilationKernels() {
             !backend.second.op_filter(kdef.get())) {
           continue;
         }
-        VLOG(2) << "XLA op registration: device: " << backend.first
-                << " op: " << op_name;
         registry.kernel_registrars_.emplace_back(
             new kernel_factory::OpKernelRegistrar(
                 new KernelDef(*kdef), "XlaJitOp", op_registration->factory));
