@@ -315,6 +315,8 @@ DirectSession::DirectSession(const SessionOptions& options,
   const int thread_pool_size =
       options_.config.session_inter_op_thread_pool_size();
   if (thread_pool_size > 0) {
+    VLOG(3) << "Create one or more thread pools with different options in this "
+               "session";
     for (int i = 0; i < thread_pool_size; ++i) {
       thread::ThreadPool* pool = nullptr;
       bool owned = false;
@@ -324,9 +326,11 @@ DirectSession::DirectSession(const SessionOptions& options,
       thread_pools_.emplace_back(pool, owned);
     }
   } else if (options_.config.use_per_session_threads()) {
+    VLOG(3) << "Create an individual thread pool in this session";
     thread_pools_.emplace_back(NewThreadPoolFromSessionOptions(options_),
                                true /* owned */);
   } else {
+    VLOG(3) << "Use global thread pool in this session";
     thread_pools_.emplace_back(GlobalThreadPool(options), false /* owned */);
     // Run locally if environment value of TF_NUM_INTEROP_THREADS is negative
     // and config.inter_op_parallelism_threads is unspecified or negative.
@@ -641,6 +645,8 @@ Status DirectSession::RunInternal(
         threadpool_options.inter_op_threadpool);
     pool = threadpool_wrapper.get();
   } else if (run_options.inter_op_thread_pool() >= 0) {
+    VLOG(3) << "The id of thread pool to be used in this session: "
+            << run_options.inter_op_thread_pool();
     pool = thread_pools_[run_options.inter_op_thread_pool()].first;
   }
 
@@ -1297,6 +1303,7 @@ Status DirectSession::CreateExecutors(
     std::unique_ptr<Graph>& partition_graph = iter->second;
 
     Device* device;
+    VLOG(1) << "Look up devices for partition: " << partition_name;
     TF_RETURN_IF_ERROR(device_mgr_->LookupDevice(partition_name, &device));
 
     ek->items.resize(ek->items.size() + 1);
@@ -1651,8 +1658,8 @@ Status DirectSession::CreateGraphs(
     const string& partition_name = partition.first;
     std::unique_ptr<Graph>* graph = &partition.second;
 
-    VLOG(2) << "Created " << DebugString(graph->get()) << " for "
-            << partition_name;
+    VLOG(2) << "Created " << DebugString(graph->get())
+            << " for partition: " << partition_name;
 
     // Give the device an opportunity to rewrite its subgraph.
     Device* d;
