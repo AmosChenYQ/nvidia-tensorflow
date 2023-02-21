@@ -1119,6 +1119,7 @@ absl::flat_hash_set<string> GetOrCreateWhitelist() {
   absl::flat_hash_set<string> whitelist;
 
   for (auto s : absl::StrSplit(flags->tf_xla_ops_to_cluster, ",")) {
+    VLOG(3) << "Flag tf_xla_ops_to_cluster: " << s;
     if (s == "FUSIBLE") {
       for (auto pair : *whitelist_table) {
         whitelist.insert(pair.second.begin(), pair.second.end());
@@ -1132,10 +1133,10 @@ absl::flat_hash_set<string> GetOrCreateWhitelist() {
     }
   }
 
-  if (VLOG_IS_ON(2) && !whitelist.empty()) {
+  if (!whitelist.empty()) {
     std::vector<string> vwhitelist(whitelist.begin(), whitelist.end());
     absl::c_sort(vwhitelist);
-    VLOG(2) << "XLA clustering will only consider the following TF operations: "
+    VLOG(3) << "XLA clustering will only consider the following TF operations: "
             << absl::StrJoin(vwhitelist, " ");
   }
   return whitelist;
@@ -1334,8 +1335,8 @@ Status MarkForCompilationPassImpl::FindCompilationCandidates() {
   bool exclude_possible_dynamic_nodes = ExcludePossibleDynamicOps();
   if (exclude_possible_dynamic_nodes) {
     TF_RETURN_IF_ERROR(PopulateDynamicNodesToExclude());
-    if (VLOG_IS_ON(4)) {
-      VLOG(4) << "List of nodes with fully defined output shapes: "
+    if (VLOG_IS_ON(3)) {
+      VLOG(3) << "List of nodes with fully defined output shapes: "
               << tensorflow::NodeShapesInfo::GetNodeShapesInfo()
                      ->ToStringFullyDefinedNodes();
     }

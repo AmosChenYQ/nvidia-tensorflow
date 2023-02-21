@@ -408,6 +408,23 @@ Status ReplaceNodeWithXlaCompileAndXlaRun(
                                /*resources=*/cluster_info.resource_inputs,
                                /*must_compile=*/requires_compilation,
                                cluster_info.function);
+  std::vector<string> constant_inputs_names, non_constant_inputs_names,
+      resource_inputs_names;
+  for (const auto& constant_input : cluster_info.constant_inputs) {
+    constant_inputs_names.push_back(constant_input.name());
+  }
+  for (const auto& non_constant_input : cluster_info.non_constant_inputs) {
+    non_constant_inputs_names.push_back(non_constant_input.name());
+  }
+  for (const auto& resource_input : cluster_info.resource_inputs) {
+    resource_inputs_names.push_back(resource_input.name());
+  }
+  VLOG(3) << "constant_inputs=" << absl::StrJoin(constant_inputs_names, ",");
+  VLOG(3) << "non_constant_inputs=" << absl::StrJoin(non_constant_inputs_names, ",");
+  VLOG(3) << "resource_inputs=" << absl::StrJoin(resource_inputs_names, ",");
+  VLOG(3) << "must compile=" << (requires_compilation ? "true" : "false");
+  VLOG(3) << "function_name=" << cluster_info.function.name();
+
   TF_RETURN_IF_ERROR(
       CopyIncomingControlEdges(g, /*from=*/n, /*to=*/xla_compile.key.node()));
 
@@ -472,6 +489,10 @@ Status ReplaceNodeWithXlaCompileAndXlaRun(
 Status BuildXlaOpsPass::Run(const GraphOptimizationPassOptions& options) {
   Graph* graph = options.graph->get();
 
+  if (VLOG_IS_ON(3)) {
+    DumpGraphToFile("build_xla_ops_before", *graph, options.flib_def);
+  }
+
   // Copy out the nodes we want to rewrite to avoid modifying the graph while we
   // iterate on graph->op_nodes().
   std::vector<Node*> xla_compiled_kernels;
@@ -506,13 +527,15 @@ Status BuildXlaOpsPass::Run(const GraphOptimizationPassOptions& options) {
   VLOG(1) << "check_output_numerics = " << debugging_opts.check_output_numerics;
 
   for (Node* n : xla_compiled_kernels) {
+    VLOG(3) << "Replace node '" << n->DebugString()
+            << "' with _XlaCompile and _XlaRun";
     TF_RETURN_IF_ERROR(ReplaceNodeWithXlaCompileAndXlaRun(
         &device_info_cache, options, *options.flib_def,
         lazy_compilation_enabled, debugging_opts, graph, n));
   }
 
-  if (VLOG_IS_ON(1)) {
-    DumpGraphToFile("build_xla_ops", *graph, options.flib_def);
+  if (VLOG_IS_ON(3)) {
+    DumpGraphToFile("build_xla_ops_after", *graph, options.flib_def);
   }
 
   return Status::OK();
