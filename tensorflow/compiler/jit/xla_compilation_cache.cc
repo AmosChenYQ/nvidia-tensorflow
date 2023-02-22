@@ -145,6 +145,7 @@ Status XlaCompilationCache::BuildExecutable(
     const XlaCompiler::Options& options,
     const XlaCompiler::CompilationResult& result,
     std::unique_ptr<xla::LocalExecutable>* executable) {
+  XLA_SCOPED_LOGGING_TIMER("XlaCompilationCache::BuildExecutable");
   VLOG(2) << "Compiling to local executable";
 
   std::vector<const xla::Shape*> argument_layouts(

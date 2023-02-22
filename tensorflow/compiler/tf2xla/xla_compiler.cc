@@ -686,8 +686,8 @@ Status XlaCompiler::CompileFunction(
     }
   }
 
-  if (VLOG_IS_ON(2)) {
-    VLOG(2) << "XlaCompiler::CompileFunction: "
+  if (VLOG_IS_ON(3)) {
+    VLOG(3) << "XlaCompiler::CompileFunction: "
             << DumpGraphToFile(
                    absl::StrCat("xla_compile_function_", function_id), *graph);
   }
@@ -1177,6 +1177,7 @@ Status XlaCompiler::CompileGraph(
     std::unique_ptr<Graph> graph, absl::Span<const XlaCompiler::Argument> args,
     absl::Span<const xla::XlaBuilder::InputOutputAlias> user_aliases,
     CompilationResult* result) {
+  XLA_SCOPED_LOGGING_TIMER("XlaCompiler::CompileGraph");
   VLOG(1) << "Executing graph symbolically to populate XlaBuilder.: " << name;
 
   TF_RETURN_IF_ERROR(PropagateConstIntoFunctionalNodes(
