@@ -462,16 +462,19 @@ static Status CompileModuleToLlvmIrImpl(
     return GpuCompiler::GetSizeOfShape(buffer_value.shape(), pointer_size);
   };
 
-  TF_ASSIGN_OR_RETURN(
-      *buffer_assignment,
-      BufferAssigner::Run(
-          hlo_module, (*hlo_schedule)->ConsumeHloOrdering(),
-          buffer_size_bytes_function,
-          /*color_alignment=*/
-          [](LogicalBuffer::Color) { return kXlaAllocatedBufferAlignBytes; },
-          /*allocate_buffers_for_constants=*/true,
-          /*colorer=*/BufferAssigner::DefaultColorer(),
-          /*must_not_live_out=*/{}, can_share_buffer_function));
+  {
+    XLA_SCOPED_LOGGING_TIMER("GpuCompiler::RunBackend - Buffer assignment");
+    TF_ASSIGN_OR_RETURN(
+        *buffer_assignment,
+        BufferAssigner::Run(
+            hlo_module, (*hlo_schedule)->ConsumeHloOrdering(),
+            buffer_size_bytes_function,
+            /*color_alignment=*/
+            [](LogicalBuffer::Color) { return kXlaAllocatedBufferAlignBytes; },
+            /*allocate_buffers_for_constants=*/true,
+            /*colorer=*/BufferAssigner::DefaultColorer(),
+            /*must_not_live_out=*/{}, can_share_buffer_function));
+  }
 
   VLOG(1) << "Buffer Assignment Stats "
           << (*buffer_assignment)->GetStats().ToString();

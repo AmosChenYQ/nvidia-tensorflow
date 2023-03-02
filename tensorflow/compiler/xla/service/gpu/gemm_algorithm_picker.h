@@ -16,6 +16,7 @@ limitations under the License.
 #define TENSORFLOW_COMPILER_XLA_SERVICE_GPU_GEMM_ALGORITHM_PICKER_H_
 
 #include "absl/types/optional.h"
+#include "tensorflow/compiler/xla/service/gpu/backend_configs.pb.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_conv_runner.h"
 #include "tensorflow/compiler/xla/service/hlo_instructions.h"
 #include "tensorflow/compiler/xla/service/hlo_module.h"
@@ -26,6 +27,35 @@ limitations under the License.
 
 namespace xla {
 namespace gpu {
+
+class GemmAutotuneCache {
+ friend class GemmAutotuneCacheSingleton;
+ public:
+  GemmAutotuneCache();
+  ~GemmAutotuneCache();
+  static uint64 GemmAutotuneCacheKeyHasher(se::StreamExecutor* stream_exec,
+                                           Shape lhs_shape, Shape rhs_shape,
+                                           Shape instr_shape,
+                                           GemmBackendConfig gemm_config);
+  static GemmAutotuneCacheValue CreateGemmAutotuneCacheValue(
+      se::StreamExecutor* stream_exec, Shape lhs_shape, Shape rhs_shape,
+      Shape instr_shape, GemmBackendConfig gemm_config,
+      absl::optional<se::blas::AlgorithmType> result);
+  bool LookupCache(uint64 key, absl::optional<se::blas::AlgorithmType>& result);
+  bool AddToCache(uint64 key, const GemmAutotuneCacheValue& cache_value);
+  int64 cache_hits;
+  int64 cache_misses;
+
+ private:
+  std::string autotune_cache_filename_;
+  bool in_use_;
+  GemmAutotuneCacheProto gemm_autotune_cache_proto_;
+};
+
+class GemmAutotuneCacheSingleton {
+  public:
+   static GemmAutotuneCache* GetInstance();
+};
 
 class GemmAlgorithmPicker : public HloModulePass {
  public:

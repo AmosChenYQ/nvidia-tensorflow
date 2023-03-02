@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <limits>
 
+#include "tensorflow/compiler/xla/debug_options_flags.h"
 #include "tensorflow/compiler/xla/service/gpu/backend_configs.pb.h"
 #include "tensorflow/compiler/xla/service/gpu/buffer_comparator.h"
 #include "tensorflow/compiler/xla/service/gpu/gemm_thunk.h"
@@ -39,18 +40,12 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+using tensorflow::Hash64;
+using tensorflow::Hash64Combine;
+
 using tensorflow::AutotuneResult;
 
-using GemmCacheKey =
-    std::tuple<se::StreamExecutor*, Shape, Shape, Shape, std::string>;
-
-static tensorflow::mutex autotune_cache_mu(tensorflow::LINKER_INITIALIZED);
-static auto& autotune_cache TF_GUARDED_BY(autotune_cache_mu) =
-    *new absl::flat_hash_map<GemmCacheKey,
-                             absl::optional<se::blas::AlgorithmType>>();
-static int64 cache_hits TF_GUARDED_BY(autotune_cache_mu) = 0;
-static int64 cache_misses TF_GUARDED_BY(autotune_cache_mu) = 0;
-
+static tensorflow::mutex gemm_autotune_cache_mu(tensorflow::LINKER_INITIALIZED);
 // Experimentally tries to pick the best algorithm for the given gemm.
 //
 // This may fail under perfectly normal circumstances.  In particular, it will
@@ -74,7 +69,7 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoUncachedGemmAutotune(
   const bool reinit_cublas_data = cublas_autotune_level > 2;
   const bool check_cublas = cublas_autotune_level > 3;
 
-  VLOG(3) << "Starting autotune of GemmThunk " << gemm->ToString();
+  VLOG(1) << "Starting autotune of GemmThunk " << gemm->ToString();
 
   std::vector<se::blas::AlgorithmType> algorithms;
   CHECK(stream->parent()->GetBlasGemmAlgorithms(&algorithms));
@@ -112,7 +107,7 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoUncachedGemmAutotune(
     AutotuneResult& result = profile_results.back();
     result.mutable_gemm()->set_algorithm(algorithm);
 
-    VLOG(2) << "cublas gemm algorithm " << algorithm << " took "
+    VLOG(1) << "cublas gemm algorithm " << algorithm << " took "
             << profile_result.elapsed_time_in_ms() << "ms" << std::endl;
 
     *result.mutable_run_time() = tensorflow::proto_utils::ToDurationProto(
@@ -206,33 +201,39 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
   GemmBackendConfig gemm_config =
       instr->backend_config<GemmBackendConfig>().ValueOrDie();
 
-  GemmCacheKey key =
-      std::make_tuple(stream->parent(), lhs->shape(), rhs->shape(),
-                      instr->shape(), gemm_config.SerializeAsString());
+  auto hashed_cache_key = GemmAutotuneCache::GemmAutotuneCacheKeyHasher(
+      stream->parent(), lhs->shape(), rhs->shape(), instr->shape(),
+      gemm_config);
+  VLOG(1) << "hashed_cache_key: " << hashed_cache_key;
 
-  tensorflow::mutex_lock cache_lock(autotune_cache_mu);
-  auto it = autotune_cache.find(key);
-  int64 autotuning_requests = cache_hits + cache_misses;
-  if (autotuning_requests && autotuning_requests % 10 == 0) {
-    VLOG(2) << "Autotuning cache hits/(hits + misses): " << cache_hits << "/"
-            << autotuning_requests;
+  tensorflow::mutex_lock cache_lock(gemm_autotune_cache_mu);
+  absl::optional<se::blas::AlgorithmType> result;
+  bool is_found_cache = GemmAutotuneCacheSingleton::GetInstance()->LookupCache(
+      hashed_cache_key, result);
+  int64 gemm_autotune_requests =
+      GemmAutotuneCacheSingleton::GetInstance()->cache_hits +
+      GemmAutotuneCacheSingleton::GetInstance()->cache_misses;
+  if (gemm_autotune_requests) {
+    VLOG(1) << "Autotuning cache hits/(hits + misses): "
+            << GemmAutotuneCacheSingleton::GetInstance()->cache_hits << "/"
+            << gemm_autotune_requests;
   }
 
-  if (it != autotune_cache.end()) {
-    cache_hits++;
-    VLOG(4) << "Autotuning cache hit, using algorithm: "
-            << (it->second.has_value() ? absl::StrCat(it->second.value())
-                                       : "<generic>");
-    return it->second;
+  if (is_found_cache) {
+    GemmAutotuneCacheSingleton::GetInstance()->cache_hits++;
+    VLOG(1) << "Autotuning cache hit, using algorithm: "
+            << (result.has_value() ? absl::StrCat(result.value())
+                                   : "<generic>");
+    return result;
   }
-  cache_misses++;
-  VLOG(4) << "Autotuning cache miss";
+  GemmAutotuneCacheSingleton::GetInstance()->cache_misses++;
+  VLOG(1) << "Autotuning cache miss";
 
   int64 batch_size = gemm_config.batch_size();
-  absl::optional<se::blas::AlgorithmType> result;
+  // TODO(AmosChenYQ): Figure out how to implement batched gemm.
   if (batch_size != 1) {
     // TODO(b/112111608): Implement auto tune for batched gemm.
-    VLOG(2) << "Batch size is non-singular, using generic algorithm";
+    VLOG(1) << "Batch size is non-singular, using generic algorithm";
     result = absl::nullopt;
   } else {
     TF_ASSIGN_OR_RETURN(
@@ -241,8 +242,10 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
                                reference_result_buffer, stream, allocator,
                                comparator, crash_on_checking_failure));
   }
-
-  CHECK(autotune_cache.emplace(key, result).second);
+  CHECK(GemmAutotuneCacheSingleton::GetInstance()->AddToCache(
+      hashed_cache_key, GemmAutotuneCache::CreateGemmAutotuneCacheValue(
+                            stream->parent(), lhs->shape(), rhs->shape(),
+                            instr->shape(), gemm_config, result)));
   return result;
 }
 
@@ -340,6 +343,108 @@ StatusOr<bool> GemmAlgorithmPicker::Run(HloModule* module) {
     changed |= result;
   }
   return changed;
+}
+
+/* static */ GemmAutotuneCache* GemmAutotuneCacheSingleton::GetInstance() {
+  static std::shared_ptr<GemmAutotuneCache> gemm_autotune_cache_ptr =
+      std::make_shared<GemmAutotuneCache>();
+  return gemm_autotune_cache_ptr.get();
+}
+
+// TODO(AmosChenYQ): Use template variadic functions to replace this. 
+/* static */ uint64 GemmAutotuneCache::GemmAutotuneCacheKeyHasher(
+    se::StreamExecutor* stream_exec, Shape lhs_shape, Shape rhs_shape,
+    Shape instr_shape, GemmBackendConfig gemm_config) {
+  uint64 hashed_platform_name = Hash64(stream_exec->platform()->Name());
+  uint64 hashed_lhs_shape = Hash64(lhs_shape.DebugString());
+  uint64 hashed_rhs_shape = Hash64(rhs_shape.DebugString());
+  uint64 hashed_instr_shape = Hash64(instr_shape.DebugString());
+  uint64 hashed_gemm_config = Hash64(gemm_config.DebugString());
+  return Hash64Combine(
+      Hash64Combine(
+          Hash64Combine(Hash64Combine(hashed_lhs_shape, hashed_rhs_shape),
+                        hashed_instr_shape),
+          hashed_gemm_config),
+      hashed_platform_name);
+}
+
+/* static */ GemmAutotuneCacheValue
+GemmAutotuneCache::CreateGemmAutotuneCacheValue(
+    se::StreamExecutor* stream_exec, Shape lhs_shape, Shape rhs_shape,
+    Shape instr_shape, GemmBackendConfig gemm_config,
+    absl::optional<se::blas::AlgorithmType> result) {
+  GemmAutotuneCacheValue cache_value_to_add;
+  cache_value_to_add.set_platform_name(stream_exec->platform()->Name());
+  cache_value_to_add.mutable_lhs_shape()->CopyFrom(lhs_shape.ToProto());
+  cache_value_to_add.mutable_rhs_shape()->CopyFrom(rhs_shape.ToProto());
+  cache_value_to_add.mutable_instr_shape()->CopyFrom(instr_shape.ToProto());
+  cache_value_to_add.mutable_gemm_backend_config()->CopyFrom(gemm_config);
+  if (result.has_value()) {
+    cache_value_to_add.set_selected_algorithm(result.value());
+  } else {
+    cache_value_to_add.clear_selected_algorithm();
+  }
+  return cache_value_to_add;
+}
+
+bool GemmAutotuneCache::LookupCache(
+    uint64 key, absl::optional<se::blas::AlgorithmType>& result) {
+  if (gemm_autotune_cache_proto_.gemm_autotune_cache_map().count(key) > 0) {
+    GemmAutotuneCacheValue cache_value =
+        (*gemm_autotune_cache_proto_.mutable_gemm_autotune_cache_map())[key];
+    if (cache_value.algorithm_case() ==
+        GemmAutotuneCacheValue::ALGORITHM_NOT_SET) {
+      result = absl::nullopt;
+    } else {
+      result = cache_value.selected_algorithm();
+    }
+    return true;
+  }
+  return false;
+}
+
+bool GemmAutotuneCache::AddToCache(uint64 key,
+                                   const GemmAutotuneCacheValue& cache_value) {
+  if (gemm_autotune_cache_proto_.gemm_autotune_cache_map().count(key) > 0) {
+    return false;
+  }
+  return gemm_autotune_cache_proto_.mutable_gemm_autotune_cache_map()
+      ->insert({key, cache_value})
+      .second;
+}
+
+GemmAutotuneCache::GemmAutotuneCache() {
+  VLOG(1) << "GemmAutotuneCache constructor";
+  cache_hits = 0;
+  cache_misses = 0;
+  autotune_cache_filename_ =
+      GetDebugOptionsFromFlags()
+          .xla_gpu_gemm_algorithm_autotune_cache_filename();
+  in_use_ = !autotune_cache_filename_.empty();
+  if (in_use_ &&
+      tensorflow::Env::Default()->FileExists(autotune_cache_filename_).ok()) {
+    VLOG(1) << "Loading autotune cache from " << autotune_cache_filename_;
+    std::string serialized_proto_str;
+    tensorflow::ReadFileToString(tensorflow::Env::Default(),
+                                 autotune_cache_filename_,
+                                 &serialized_proto_str);
+    VLOG(1) << "Read file content:\n" << serialized_proto_str;
+    gemm_autotune_cache_proto_.ParseFromString(serialized_proto_str);
+    VLOG(1) << "Proto serialized result:\n"
+            << gemm_autotune_cache_proto_.DebugString();
+  }
+}
+
+GemmAutotuneCache::~GemmAutotuneCache() {
+  VLOG(1) << "GemmAutotuneCache destructor";
+  if (in_use_ && !autotune_cache_filename_.empty()) {
+    VLOG(1) << "Commiting autotune cache to " << autotune_cache_filename_;
+    std::string serialized_proto_str;
+    gemm_autotune_cache_proto_.SerializeToString(&serialized_proto_str);
+    tensorflow::WriteStringToFile(tensorflow::Env::Default(),
+                                  autotune_cache_filename_,
+                                  serialized_proto_str);
+  }
 }
 
 }  // namespace gpu
