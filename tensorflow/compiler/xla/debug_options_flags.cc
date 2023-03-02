@@ -458,6 +458,13 @@ static void AllocateFlags() {
 	     &DebugOptions::set_xla_gpu_persistent_cache_dir), "",
           "The directory for the persistent compilation cache."),
       tensorflow::Flag(
+          "xla_gpu_gemm_algorithm_autotune_cache_filename",
+          string_setter_for(
+	     &DebugOptions::set_xla_gpu_gemm_algorithm_autotune_cache_filename), "",
+          "The filename of the gpu gemm algorithmn autotune cache.  Format"
+          "--xla_gpu_gemm_algorithm_autotune_cache_filename=/root/gpu_gemm_algorithm_autotune_cache"
+          "This cache file should only be used in the same machine"),
+      tensorflow::Flag(
           "xla_fuel", setter_for_xla_fuel, /*default_value_for_display=*/"",
           "Sets compiler fuel, useful for bisecting bugs in passes.  Format "
           "--xla_fuel=PASS1=NUM1,PASS2=NUM2,..."),
