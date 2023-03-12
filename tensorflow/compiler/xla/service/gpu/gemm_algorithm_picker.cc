@@ -230,18 +230,13 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
   VLOG(1) << "Autotuning cache miss";
 
   int64 batch_size = gemm_config.batch_size();
-  // TODO(AmosChenYQ): Figure out how to implement batched gemm.
-  if (batch_size != 1) {
-    // TODO(b/112111608): Implement auto tune for batched gemm.
-    VLOG(1) << "Batch size is non-singular, using generic algorithm";
-    result = absl::nullopt;
-  } else {
-    TF_ASSIGN_OR_RETURN(
-        result,
-        DoUncachedGemmAutotune(instr, lhs_buffer, rhs_buffer, output_buffer,
-                               reference_result_buffer, stream, allocator,
-                               comparator, crash_on_checking_failure));
-  }
+
+  // TODO(AmosChenYQ): Test the correctness of autotune result.
+  TF_ASSIGN_OR_RETURN(result, DoUncachedGemmAutotune(
+                                  instr, lhs_buffer, rhs_buffer, output_buffer,
+                                  reference_result_buffer, stream, allocator,
+                                  comparator, crash_on_checking_failure));
+
   CHECK(GemmAutotuneCacheSingleton::GetInstance()->AddToCache(
       hashed_cache_key, GemmAutotuneCache::CreateGemmAutotuneCacheValue(
                             stream->parent(), lhs->shape(), rhs->shape(),

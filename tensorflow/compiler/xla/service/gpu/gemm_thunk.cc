@@ -112,9 +112,9 @@ static bool DoGemmWithAlgorithm(
                                             : se::blas::Transpose::kNoTranspose;
   auto k = lhs_matrix.transpose ? lhs_matrix.num_rows : lhs_matrix.num_cols;
 
-  if (algorithm) {
+  if (algorithm && batch_size == 1) {
     // Autotuning is disabled for batch_size != 1.
-    CHECK_EQ(1, batch_size);
+    // CHECK_EQ(1, batch_size);
     return stream
         ->ThenBlasGemmWithAlgorithm(
             lhs_transpose, rhs_transpose, output_matrix.num_rows,
@@ -128,12 +128,30 @@ static bool DoGemmWithAlgorithm(
             *algorithm, output_profile_result)
         .ok();
   }
-
+  // When batch size > 1, use cublasGemmStridedBatchedEx with algo 
+  // else use cublas(S|D|C|Z)gemmStridedBatched 
   if (batch_size != 1) {
     int64 lhs_stride = lhs_matrix.num_rows * lhs_matrix.num_cols;
     int64 rhs_stride = rhs_matrix.num_rows * rhs_matrix.num_cols;
     int64 output_stride = output_matrix.num_rows * output_matrix.num_cols;
-    return stream
+
+    if (algorithm) {
+      VLOG(1) << "Use ThenBlasGemmStridedBatchedWithAlgorithm with "
+              << "algorithm " << *algorithm;
+      return stream
+          ->ThenBlasGemmStridedBatchedWithAlgorithm(
+              lhs_transpose, rhs_transpose, output_matrix.num_rows,
+              output_matrix.num_cols, /*size of reduce dim=*/k,
+              /*alpha=*/alpha, lhs_data,
+              /*leading dim of LHS=*/lhs_matrix.num_rows, lhs_stride, rhs_data,
+              /*leading dim of RHS=*/rhs_matrix.num_rows, rhs_stride,
+              /*beta=*/beta, &output_data,
+              /*leading dim of output=*/output_matrix.num_rows, output_stride,
+              batch_size, computation_type, *algorithm, output_profile_result)
+          .ok();
+    } else {
+      VLOG(1) << "Use ThenBlasGemmStridedBatched without algorithm.";
+      return stream
         ->ThenBlasGemmStridedBatched(
             lhs_transpose, rhs_transpose, output_matrix.num_rows,
             output_matrix.num_cols, /*size of reduce dim=*/k,
@@ -144,6 +162,7 @@ static bool DoGemmWithAlgorithm(
             /*leading dim of output=*/output_matrix.num_rows, output_stride,
             batch_size)
         .ok();
+    }
   }
 
   return stream
