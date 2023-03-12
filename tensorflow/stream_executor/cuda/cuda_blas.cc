@@ -2673,6 +2673,167 @@ bool CUDABlas::DoBlasGemmStridedBatched(
       GpuComplex(GpuMemoryMutable(c)), ldc, stride_c, batch_count);
 }
 
+template <typename InT, typename OutT, typename AlphaType>
+bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithmImpl(
+    Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+    uint64 n, uint64 k, AlphaType alpha, const DeviceMemory<InT>& a, int lda,
+    int64 stride_a, const DeviceMemory<InT>& b, int ldb, int64 stride_b,
+    double beta, DeviceMemory<OutT>* c, int ldc, int64 stride_c, int batch_count,
+    blas::ComputationType computation_type, blas::AlgorithmType algorithm,
+    blas::ProfileResult* output_profile_result) {
+  // Since we are converting 'algorithm' to cublasGemmAlgo_t by static_cast,
+  // we do the following compile-time check on the default value:
+  static_assert(blas::kDefaultGemmAlgo == CUBLAS_GEMM_DFALT, "");
+
+  if (!std::is_same<InT, OutT>::value) {
+    // Check if InT and OutT is the same type for simplicity.
+    // TODO(AmosChenYQ): Modify the following code according to
+    // cublasGemmBatchedEx document to relax the type restrction.
+    LOG(ERROR)
+        << "DoBlasGemmStridedBatchedWithAlgorithm returning false because "
+           "underlying cuda blas algorithm restricts input and output to be of "
+           "the same type";
+    return false;
+  }
+
+  int cc_major, cc_minor;
+  if (stream->parent()->GetDeviceDescription().cuda_compute_capability(
+          &cc_major, &cc_minor) &&
+      cc_major < 5) {
+    LOG(ERROR)
+        << "DoBlasGemmStridedBatchedWithAlgorithm returning false because "
+           "cublasGemmStridedBatchedEx is only supported for GPU architecture "
+           "with capabilities equal or greater than 5.0, while this device has sm"
+        << cc_major << cc_minor
+        << " which doesn't support these gemm algorithms.";
+    return false;
+  }
+
+  if (UsesTensorOps(algorithm) && !TensorOpsAvailable<InT>(cc_major)) {
+    if (std::is_same<InT, Eigen::half>::value) {
+      LOG(ERROR) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
+                    "because algorithm "
+                 << algorithm
+                 << " uses tensor ops, but tensor ops are not available in sm"
+                 << cc_major << "X devices.";
+    } else {
+      LOG(ERROR) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
+                    "because algorithm "
+                 << algorithm
+                 << " uses tensor ops, but the input data type is not fp16.";
+    }
+    return false;
+  }
+
+  std::unique_ptr<GpuTimer, GpuTimerDeleter> timer;
+  if (output_profile_result != nullptr) {
+    timer.reset(new GpuTimer(parent_));
+    if (!timer->Init() || !timer->Start(AsGpuStream(stream))) {
+      LOG(ERROR) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
+                    "because "
+                    "output_profile_result was given, but we were unable to "
+                    "create a GpuTimer.";
+      return false;
+    }
+  }
+
+  cublasStatus_t (*gemm)(cublasHandle_t, cublasOperation_t, cublasOperation_t,
+                         int, int, int, const void*, const void*, cudaDataType,
+                         int, long long int, const void*, cudaDataType, int,
+                         long long int, const void*, void*, cudaDataType, int,
+                         long long int, int, cudaDataType,
+                         cublasGemmAlgo_t) = cublasGemmStridedBatchedEx;
+
+  cudaDataType_t cuda_in_type = CUDADataType<InT>::type;
+  cudaDataType_t cuda_out_type = CUDADataType<OutT>::type;
+  cudaDataType_t cuda_computation_type = CUDAComputationType(computation_type);
+
+  bool result = DoBlasInternalFailureOK<InT>(
+      gemm, stream, true /* = pointer_mode_host */, CUDABlasTranspose(transa),
+      CUDABlasTranspose(transb), m, n, k, &alpha, GpuMemory(a), cuda_in_type,
+      lda, stride_a, GpuMemory(b), cuda_in_type, ldb, stride_b, &beta,
+      GpuMemoryMutable(c), cuda_out_type, ldc, stride_c, batch_count,
+      cuda_computation_type, static_cast<cublasGemmAlgo_t>(algorithm));
+
+  if (timer != nullptr && result) {
+    // GpuTimer will CHECK-fail if we Stop() it while the stream is in an error
+    // state.
+    if (!timer->Stop(AsGpuStream(stream))) {
+      VLOG(2) << "DoBlasGemmWithAlgorithm returning false; unable to stop "
+                 "GpuTimer.";
+      return false;
+    }
+    output_profile_result->set_is_valid(true);
+    output_profile_result->set_algorithm(algorithm);
+    output_profile_result->set_elapsed_time_in_ms(
+        timer->GetElapsedMilliseconds());
+  }
+  return result;
+}
+
+bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithm(
+    Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+    uint64 n, uint64 k, double alpha, const DeviceMemory<Eigen::half>& a,
+    int lda, int64 stride_a, const DeviceMemory<Eigen::half>& b, int ldb,
+    int64 stride_b, double beta, DeviceMemory<Eigen::half>* c, int ldc,
+    int64 stride_c, int batch_count, blas::ComputationType computation_type,
+    blas::AlgorithmType algorithm, blas::ProfileResult* output_profile_result) {
+  return DoBlasGemmStridedBatchedWithAlgorithmImpl(
+      stream, transa, transb, m, n, k, alpha, a, lda, stride_a, b, ldb,
+      stride_b, beta, c, ldc, stride_c, batch_count, computation_type,
+      algorithm, output_profile_result);
+}
+bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithm(
+    Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+    uint64 n, uint64 k, double alpha, const DeviceMemory<float>& a, int lda,
+    int64 stride_a, const DeviceMemory<float>& b, int ldb, int64 stride_b,
+    double beta, DeviceMemory<float>* c, int ldc, int64 stride_c,
+    int batch_count, blas::ComputationType computation_type,
+    blas::AlgorithmType algorithm, blas::ProfileResult* output_profile_result) {
+  return DoBlasGemmStridedBatchedWithAlgorithmImpl(
+      stream, transa, transb, m, n, k, alpha, a, lda, stride_a, b, ldb,
+      stride_b, beta, c, ldc, stride_c, batch_count, computation_type,
+      algorithm, output_profile_result);
+}
+bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithm(
+    Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+    uint64 n, uint64 k, double alpha, const DeviceMemory<double>& a, int lda,
+    int64 stride_a, const DeviceMemory<double>& b, int ldb, int64 stride_b,
+    double beta, DeviceMemory<double>* c, int ldc, int64 stride_c,
+    int batch_count, blas::ComputationType computation_type,
+    blas::AlgorithmType algorithm, blas::ProfileResult* output_profile_result) {
+  return DoBlasGemmStridedBatchedWithAlgorithmImpl(
+      stream, transa, transb, m, n, k, alpha, a, lda, stride_a, b, ldb,
+      stride_b, beta, c, ldc, stride_c, batch_count, computation_type,
+      algorithm, output_profile_result);
+}
+bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithm(
+    Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+    uint64 n, uint64 k, std::complex<float> alpha,
+    const DeviceMemory<std::complex<float>>& a, int lda, int64 stride_a,
+    const DeviceMemory<std::complex<float>>& b, int ldb, int64 stride_b,
+    double beta, DeviceMemory<std::complex<float>>* c, int ldc, int64 stride_c,
+    int batch_count, blas::ComputationType computation_type,
+    blas::AlgorithmType algorithm, blas::ProfileResult* output_profile_result) {
+  return DoBlasGemmStridedBatchedWithAlgorithmImpl(
+      stream, transa, transb, m, n, k, alpha, a, lda, stride_a, b, ldb,
+      stride_b, beta, c, ldc, stride_c, batch_count, computation_type,
+      algorithm, output_profile_result);
+}
+bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithm(
+    Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+    uint64 n, uint64 k, std::complex<double> alpha,
+    const DeviceMemory<std::complex<double>>& a, int lda, int64 stride_a,
+    const DeviceMemory<std::complex<double>>& b, int ldb, int64 stride_b,
+    double beta, DeviceMemory<std::complex<double>>* c, int ldc, int64 stride_c,
+    int batch_count, blas::ComputationType computation_type,
+    blas::AlgorithmType algorithm, blas::ProfileResult* output_profile_result) {
+  return DoBlasGemmStridedBatchedWithAlgorithmImpl(
+      stream, transa, transb, m, n, k, alpha, a, lda, stride_a, b, ldb,
+      stride_b, beta, c, ldc, stride_c, batch_count, computation_type,
+      algorithm, output_profile_result);
+}
+
 bool CUDABlas::DoBlasHemm(Stream *stream, blas::Side side,
                           blas::UpperLower uplo, uint64 m, uint64 n,
                           std::complex<float> alpha,

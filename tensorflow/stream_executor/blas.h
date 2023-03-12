@@ -1157,6 +1157,58 @@ class BlasSupport {
       std::complex<double> beta, DeviceMemory<std::complex<double>> *c, int ldc,
       int64 stride_c, int batch_count) = 0;
 
+  // Support for stream executor's ThenBlasGemmStridedBatchedWithAlgorithm
+  // Like DoBlasGemmStridedBatched, but accepts an algorithm and an compute type.
+  //
+  // This Blas function only supports CUDA by far.
+  //
+  // The computation type lets you say (e.g.) that the inputs and outputs are
+  // float32, but you want the internal computations to be done with
+  // Eigen::halfs precision.
+  //
+  // If output_profile_result is not null, a failure here does not put the
+  // stream in a failure state.  Instead, success/failure is indicated by
+  // output_profile_result->is_valid().  This lets you use this function for
+  // choosing the best algorithm among many (some of which may fail) without
+  // creating a new Stream for each attempt.
+  virtual bool DoBlasGemmStridedBatchedWithAlgorithm(
+      Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, double alpha, const DeviceMemory<Eigen::half>& a,
+      int lda, int64 stride_a, const DeviceMemory<Eigen::half>& b, int ldb,
+      int64 stride_b, double beta, DeviceMemory<Eigen::half>* c, int ldc,
+      int64 stride_c, int batch_count, ComputationType computation_type,
+      AlgorithmType algorithm, ProfileResult* output_profile_result) = 0;
+  virtual bool DoBlasGemmStridedBatchedWithAlgorithm(
+      Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, double alpha, const DeviceMemory<float>& a, int lda,
+      int64 stride_a, const DeviceMemory<float>& b, int ldb, int64 stride_b,
+      double beta, DeviceMemory<float>* c, int ldc, int64 stride_c,
+      int batch_count, ComputationType computation_type,
+      AlgorithmType algorithm, ProfileResult* output_profile_result) = 0;
+  virtual bool DoBlasGemmStridedBatchedWithAlgorithm(
+      Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, double alpha, const DeviceMemory<double>& a, int lda,
+      int64 stride_a, const DeviceMemory<double>& b, int ldb, int64 stride_b,
+      double beta, DeviceMemory<double>* c, int ldc, int64 stride_c,
+      int batch_count, ComputationType computation_type,
+      AlgorithmType algorithm, ProfileResult* output_profile_result) = 0;
+  virtual bool DoBlasGemmStridedBatchedWithAlgorithm(
+      Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, std::complex<float> alpha,
+      const DeviceMemory<std::complex<float>>& a, int lda, int64 stride_a,
+      const DeviceMemory<std::complex<float>>& b, int ldb, int64 stride_b,
+      double beta, DeviceMemory<std::complex<float>>* c, int ldc,
+      int64 stride_c, int batch_count, ComputationType computation_type,
+      AlgorithmType algorithm, ProfileResult* output_profile_result) = 0;
+  virtual bool DoBlasGemmStridedBatchedWithAlgorithm(
+      Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, std::complex<double> alpha,
+      const DeviceMemory<std::complex<double>>& a, int lda, int64 stride_a,
+      const DeviceMemory<std::complex<double>>& b, int ldb, int64 stride_b,
+      double beta, DeviceMemory<std::complex<double>>* c, int ldc,
+      int64 stride_c, int batch_count, ComputationType computation_type,
+      AlgorithmType algorithm, ProfileResult* output_profile_result) = 0;
+
   // Computes a matrix-matrix product where one input matrix is Hermitian:
   //
   //     c <- alpha * a * b + beta * c,
@@ -2060,6 +2112,49 @@ class BlasSupport {
       const DeviceMemory<std::complex<double>> &b, int ldb, int64 stride_b,    \
       std::complex<double> beta, DeviceMemory<std::complex<double>> *c,        \
       int ldc, int64 stride_c, int batch_count);                               \
+  bool DoBlasGemmStridedBatchedWithAlgorithm(                                  \
+      Stream* stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, double alpha,                              \
+      const DeviceMemory<Eigen::half>& a, int lda, int64 stride_a,             \
+      const DeviceMemory<Eigen::half>& b, int ldb, int64 stride_b,             \
+      double beta, DeviceMemory<Eigen::half>* c, int ldc, int64 stride_c,      \
+      int batch_count, blas::ComputationType computation_type,                 \
+      blas::AlgorithmType algorithm,                                           \
+      blas::ProfileResult* output_profile_result);                             \
+  bool DoBlasGemmStridedBatchedWithAlgorithm(                                  \
+      Stream* stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, double alpha,                              \
+      const DeviceMemory<float>& a, int lda, int64 stride_a,                   \
+      const DeviceMemory<float>& b, int ldb, int64 stride_b, double beta,      \
+      DeviceMemory<float>* c, int ldc, int64 stride_c, int batch_count,        \
+      blas::ComputationType computation_type, blas::AlgorithmType algorithm,   \
+      blas::ProfileResult* output_profile_result);                             \
+  bool DoBlasGemmStridedBatchedWithAlgorithm(                                  \
+      Stream* stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, double alpha,                              \
+      const DeviceMemory<double>& a, int lda, int64 stride_a,                  \
+      const DeviceMemory<double>& b, int ldb, int64 stride_b, double beta,     \
+      DeviceMemory<double>* c, int ldc, int64 stride_c, int batch_count,       \
+      blas::ComputationType computation_type, blas::AlgorithmType algorithm,   \
+      blas::ProfileResult* output_profile_result);                             \
+  bool DoBlasGemmStridedBatchedWithAlgorithm(                                  \
+      Stream* stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, std::complex<float> alpha,                 \
+      const DeviceMemory<std::complex<float>>& a, int lda, int64 stride_a,     \
+      const DeviceMemory<std::complex<float>>& b, int ldb, int64 stride_b,     \
+      double beta, DeviceMemory<std::complex<float>>* c, int ldc,              \
+      int64 stride_c, int batch_count, blas::ComputationType computation_type, \
+      blas::AlgorithmType algorithm,                                           \
+      blas::ProfileResult* output_profile_result);                             \
+  bool DoBlasGemmStridedBatchedWithAlgorithm(                                  \
+      Stream* stream, blas::Transpose transa, blas::Transpose transb,          \
+      uint64 m, uint64 n, uint64 k, std::complex<double> alpha,                \
+      const DeviceMemory<std::complex<double>>& a, int lda, int64 stride_a,    \
+      const DeviceMemory<std::complex<double>>& b, int ldb, int64 stride_b,    \
+      double beta, DeviceMemory<std::complex<double>>* c, int ldc, int64 stride_c,       \
+      int batch_count, blas::ComputationType computation_type,                 \
+      blas::AlgorithmType algorithm,                                           \
+      blas::ProfileResult* output_profile_result);                             \
   bool DoBlasHemm(Stream *stream, blas::Side side, blas::UpperLower uplo,      \
                   uint64 m, uint64 n, std::complex<float> alpha,               \
                   const DeviceMemory<std::complex<float>> &a, int lda,         \

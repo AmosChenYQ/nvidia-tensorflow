@@ -130,6 +130,20 @@ class CUDABlas : public blas::BlasSupport {
       blas::ComputationType computation_type, blas::AlgorithmType algorithm,
       blas::ProfileResult *output_profile_result);
 
+  // Helper function for implementing DoBlasGemmStridedBatchedWithAlgorithm
+  // Only same input type and output type is implemented by far.
+  // TODO(AmosChenYQ): Refer to the cublas documentation to implement complete
+  // type support.
+  template <typename InT, typename OutT, typename AlphaType>
+  bool DoBlasGemmStridedBatchedWithAlgorithmImpl(
+      Stream* stream, blas::Transpose transa, blas::Transpose transb, uint64 m,
+      uint64 n, uint64 k, AlphaType alpha, const DeviceMemory<InT>& a, int lda,
+      int64 stride_a, const DeviceMemory<InT>& b, int ldb, int64 stride_b,
+      double beta, DeviceMemory<OutT>* c, int ldc, int64 stride_c,
+      int batch_count, blas::ComputationType computation_type,
+      blas::AlgorithmType algorithm,
+      blas::ProfileResult* output_profile_result);
+
   // Helper function for implementing DoBlasGemmWithProfiling.
   template <typename T, typename ParamType>
   bool DoBlasGemmWithProfilingImpl(
