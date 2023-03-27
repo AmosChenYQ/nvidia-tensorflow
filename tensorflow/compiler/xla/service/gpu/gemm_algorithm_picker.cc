@@ -201,6 +201,19 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
   GemmBackendConfig gemm_config =
       instr->backend_config<GemmBackendConfig>().ValueOrDie();
 
+  auto log_gemm_instr_and_operands_msg = [](const HloInstruction* instr,
+                                           const HloInstruction* lhs,
+                                           const HloInstruction* rhs) {
+    auto options = HloPrintOptions::Canonical();
+    options.set_print_backend_config(true);
+    VLOG(1) << "Gemm instr in canonical string:";
+    VLOG(1) << instr->ToString();
+    VLOG(1) << "Lhs instr in canonical string:";
+    VLOG(1) << lhs->ToString();
+    VLOG(1) << "Rhs instr in canonical string:";
+    VLOG(1) << rhs->ToString();
+  };
+  log_gemm_instr_and_operands_msg(instr, lhs, rhs);
   auto hashed_cache_key = GemmAutotuneCache::GemmAutotuneCacheKeyHasher(
       stream->parent(), lhs->shape(), rhs->shape(), instr->shape(),
       gemm_config);
