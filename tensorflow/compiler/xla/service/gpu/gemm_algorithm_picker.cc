@@ -215,8 +215,7 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
   };
   log_gemm_instr_and_operands_msg(instr, lhs, rhs);
   auto hashed_cache_key = GemmAutotuneCache::GemmAutotuneCacheKeyHasher(
-      stream->parent(), lhs->shape(), rhs->shape(), instr->shape(),
-      gemm_config);
+    stream->parent(), instr, lhs, rhs, gemm_config);
   VLOG(1) << "hashed_cache_key: " << hashed_cache_key;
 
   tensorflow::mutex_lock cache_lock(gemm_autotune_cache_mu);
@@ -240,9 +239,9 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
     return result;
   }
   GemmAutotuneCacheSingleton::GetInstance()->cache_misses++;
-  VLOG(1) << "Autotuning cache miss";
-
-  int64 batch_size = gemm_config.batch_size();
+  VLOG(1) << "Autotuning cache misses/(hits + misses): "
+          << GemmAutotuneCacheSingleton::GetInstance()->cache_misses << "/"
+          << gemm_autotune_requests;
 
   // TODO(AmosChenYQ): Test the correctness of autotune result.
   TF_ASSIGN_OR_RETURN(result, DoUncachedGemmAutotune(
@@ -251,9 +250,9 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
                                   comparator, crash_on_checking_failure));
 
   CHECK(GemmAutotuneCacheSingleton::GetInstance()->AddToCache(
-      hashed_cache_key, GemmAutotuneCache::CreateGemmAutotuneCacheValue(
-                            stream->parent(), lhs->shape(), rhs->shape(),
-                            instr->shape(), gemm_config, result)));
+      hashed_cache_key,
+      GemmAutotuneCache::CreateGemmAutotuneCacheValue(
+          stream->parent(), instr, rhs, rhs, gemm_config, result)));
   return result;
 }
 
@@ -359,33 +358,34 @@ StatusOr<bool> GemmAlgorithmPicker::Run(HloModule* module) {
   return gemm_autotune_cache_ptr.get();
 }
 
-// TODO(AmosChenYQ): Use template variadic functions to replace this. 
 /* static */ uint64 GemmAutotuneCache::GemmAutotuneCacheKeyHasher(
-    se::StreamExecutor* stream_exec, Shape lhs_shape, Shape rhs_shape,
-    Shape instr_shape, GemmBackendConfig gemm_config) {
+    se::StreamExecutor* stream_exec, const HloInstruction* instr,
+    const HloInstruction* lhs, const HloInstruction* rhs,
+    const GemmBackendConfig& gemm_config) {
+  auto options = HloPrintOptions::Canonical();
+  options.set_print_backend_config(true);
+  uint64 hashed_instr = Hash64(instr->ToString());
+  uint64 hashed_lhs = Hash64(lhs->ToString());
+  uint64 hashed_rhs = Hash64(rhs->ToString());
   uint64 hashed_platform_name = Hash64(stream_exec->platform()->Name());
-  uint64 hashed_lhs_shape = Hash64(lhs_shape.DebugString());
-  uint64 hashed_rhs_shape = Hash64(rhs_shape.DebugString());
-  uint64 hashed_instr_shape = Hash64(instr_shape.DebugString());
   uint64 hashed_gemm_config = Hash64(gemm_config.DebugString());
-  return Hash64Combine(
-      Hash64Combine(
-          Hash64Combine(Hash64Combine(hashed_lhs_shape, hashed_rhs_shape),
-                        hashed_instr_shape),
-          hashed_gemm_config),
-      hashed_platform_name);
+  return Hash64Combine(hashed_instr, hashed_lhs, hashed_rhs,
+                       hashed_platform_name, hashed_gemm_config);
 }
 
 /* static */ GemmAutotuneCacheValue
 GemmAutotuneCache::CreateGemmAutotuneCacheValue(
-    se::StreamExecutor* stream_exec, Shape lhs_shape, Shape rhs_shape,
-    Shape instr_shape, GemmBackendConfig gemm_config,
+    se::StreamExecutor* stream_exec, const HloInstruction* instr,
+    const HloInstruction* lhs, const HloInstruction* rhs,
+    const GemmBackendConfig& gemm_config,
     absl::optional<se::blas::AlgorithmType> result) {
   GemmAutotuneCacheValue cache_value_to_add;
   cache_value_to_add.set_platform_name(stream_exec->platform()->Name());
-  cache_value_to_add.mutable_lhs_shape()->CopyFrom(lhs_shape.ToProto());
-  cache_value_to_add.mutable_rhs_shape()->CopyFrom(rhs_shape.ToProto());
-  cache_value_to_add.mutable_instr_shape()->CopyFrom(instr_shape.ToProto());
+  auto options = HloPrintOptions::Canonical();
+  options.set_print_backend_config(true);
+  *cache_value_to_add.mutable_instr() = instr->ToString();
+  *cache_value_to_add.mutable_lhs() = lhs->ToString();
+  *cache_value_to_add.mutable_rhs() = rhs->ToString();
   cache_value_to_add.mutable_gemm_backend_config()->CopyFrom(gemm_config);
   if (result.has_value()) {
     cache_value_to_add.set_selected_algorithm(result.value());

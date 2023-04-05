@@ -69,12 +69,14 @@ message CudnnBatchNormBackendConfig {
   int64 activation_mode = 1;
 }
 
+// Cache the selected_algorithm of gemm autotune pass
+// of instr and its left/right operands under gemm_backend_config
 message GemmAutotuneCacheValue{
   string platform_name = 1;
-  ShapeProto lhs_shape = 2;
-  ShapeProto rhs_shape = 3;
-  ShapeProto instr_shape = 4;
-  GemmBackendConfig gemm_backend_config = 5;
+  string lhs = 2;
+  string rhs = 3;
+  string instr = 4;
+  GemmBackendConfig gemm_backend_config = 5; 
   oneof algorithm {
     int64 selected_algorithm = 6;
   }

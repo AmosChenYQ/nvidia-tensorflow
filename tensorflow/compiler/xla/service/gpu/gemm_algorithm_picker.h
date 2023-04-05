@@ -30,21 +30,23 @@ namespace gpu {
 
 class GemmAutotuneCache {
  friend class GemmAutotuneCacheSingleton;
+
  public:
   GemmAutotuneCache();
   ~GemmAutotuneCache();
-  static uint64 GemmAutotuneCacheKeyHasher(se::StreamExecutor* stream_exec,
-                                           Shape lhs_shape, Shape rhs_shape,
-                                           Shape instr_shape,
-                                           GemmBackendConfig gemm_config);
+  static uint64 GemmAutotuneCacheKeyHasher(
+      se::StreamExecutor* stream_exec, const HloInstruction* instr,
+      const HloInstruction* lhs, const HloInstruction* rhs,
+      const GemmBackendConfig& gemm_config);
   static GemmAutotuneCacheValue CreateGemmAutotuneCacheValue(
-      se::StreamExecutor* stream_exec, Shape lhs_shape, Shape rhs_shape,
-      Shape instr_shape, GemmBackendConfig gemm_config,
+      se::StreamExecutor* stream_exec, const HloInstruction* instr,
+      const HloInstruction* Lhs, const HloInstruction* rhs,
+      const GemmBackendConfig& gemm_config,
       absl::optional<se::blas::AlgorithmType> result);
   bool LookupCache(uint64 key, absl::optional<se::blas::AlgorithmType>& result);
   bool AddToCache(uint64 key, const GemmAutotuneCacheValue& cache_value);
-  int64 cache_hits;
-  int64 cache_misses;
+  uint64 cache_hits;
+  uint64 cache_misses;
 
  private:
   std::string autotune_cache_filename_;
