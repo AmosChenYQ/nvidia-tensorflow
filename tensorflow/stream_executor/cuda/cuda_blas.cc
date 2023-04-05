@@ -2689,7 +2689,7 @@ bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithmImpl(
     // Check if InT and OutT is the same type for simplicity.
     // TODO(AmosChenYQ): Modify the following code according to
     // cublasGemmBatchedEx document to relax the type restrction.
-    LOG(ERROR)
+    VLOG(2)
         << "DoBlasGemmStridedBatchedWithAlgorithm returning false because "
            "underlying cuda blas algorithm restricts input and output to be of "
            "the same type";
@@ -2700,7 +2700,7 @@ bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithmImpl(
   if (stream->parent()->GetDeviceDescription().cuda_compute_capability(
           &cc_major, &cc_minor) &&
       cc_major < 5) {
-    LOG(ERROR)
+    VLOG(2)
         << "DoBlasGemmStridedBatchedWithAlgorithm returning false because "
            "cublasGemmStridedBatchedEx is only supported for GPU architecture "
            "with capabilities equal or greater than 5.0, while this device has sm"
@@ -2711,13 +2711,13 @@ bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithmImpl(
 
   if (UsesTensorOps(algorithm) && !TensorOpsAvailable<InT>(cc_major)) {
     if (std::is_same<InT, Eigen::half>::value) {
-      LOG(ERROR) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
+      VLOG(2) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
                     "because algorithm "
                  << algorithm
                  << " uses tensor ops, but tensor ops are not available in sm"
                  << cc_major << "X devices.";
     } else {
-      LOG(ERROR) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
+      VLOG(2) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
                     "because algorithm "
                  << algorithm
                  << " uses tensor ops, but the input data type is not fp16.";
@@ -2729,7 +2729,7 @@ bool CUDABlas::DoBlasGemmStridedBatchedWithAlgorithmImpl(
   if (output_profile_result != nullptr) {
     timer.reset(new GpuTimer(parent_));
     if (!timer->Init() || !timer->Start(AsGpuStream(stream))) {
-      LOG(ERROR) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
+      VLOG(2) << "DoBlasGemmStridedBatchedWithAlgorithm returning false "
                     "because "
                     "output_profile_result was given, but we were unable to "
                     "create a GpuTimer.";
