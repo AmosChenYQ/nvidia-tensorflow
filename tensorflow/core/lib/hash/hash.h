@@ -44,6 +44,14 @@ inline uint64 Hash64Combine(uint64 a, uint64 b) {
   return a ^ (b + 0x9e3779b97f4a7800ULL + (a << 10) + (a >> 4));
 }
 
+inline uint64 Hash64Combine(uint64 a, uint64 b, uint64 c) {
+  return Hash64Combine(a, Hash64Combine(b, c));
+}
+
+inline uint64 Hash64Combine(uint64 a, uint64 b, uint64 c, uint64 d, uint64 e) {
+  return Hash64Combine(Hash64Combine(a, b, c), Hash64Combine(d, e));
+}
+
 // Combine two hashes in an order-independent way. This operation should be
 // associative and compute the same hash for a collection of elements
 // independent of traversal order. Note that it is better to combine hashes
