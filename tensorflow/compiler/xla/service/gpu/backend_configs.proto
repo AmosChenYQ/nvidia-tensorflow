@@ -3,6 +3,8 @@ syntax = "proto3";
 package xla.gpu;
 
 import "tensorflow/compiler/xla/xla_data.proto";
+import "tensorflow/core/lib/core/error_codes.proto";
+import "tensorflow/core/protobuf/autotuning.proto";
 
 // Backend configs for XLA:GPU.
 //
@@ -69,8 +71,9 @@ message CudnnBatchNormBackendConfig {
   int64 activation_mode = 1;
 }
 
-// Cache the selected_algorithm of gemm autotune pass
-// of instr and its left/right operands under gemm_backend_config
+// Cache the selected_algorithm returned by DoGemmAutotune
+// of instr and its left/right operands under gemm_backend_config.
+// Keep instruction and its operands and platform information for debugging.
 message GemmAutotuneCacheValue{
   string platform_name = 1;
   string lhs = 2;
@@ -84,4 +87,23 @@ message GemmAutotuneCacheValue{
 
 message GemmAutotuneCacheProto {
   map<uint64, GemmAutotuneCacheValue> gemm_autotune_cache_map = 1;
+}
+
+// Cache the AutotuneResult returned by GpuConvAlgorithmPicker::PickBestAlgorithm
+// Keep instruction and its platform information fordebugging.
+message ConvAutotuneCacheValue {
+  message StatusMessage {
+    tensorflow.error.Code code = 1;
+    string message = 2;
+  }
+  string platform_name = 1;
+  string instr = 2;
+  oneof status_or_result {
+    StatusMessage status = 3;
+    tensorflow.AutotuneResult conv_autotune_result = 4; 
+  }
+}
+
+message ConvAutotuneCacheProto {
+  map<uint64, ConvAutotuneCacheValue> conv_autotune_cache_map = 1;
 }
