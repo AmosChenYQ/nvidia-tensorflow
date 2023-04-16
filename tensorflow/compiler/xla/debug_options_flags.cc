@@ -462,7 +462,14 @@ static void AllocateFlags() {
           string_setter_for(
 	     &DebugOptions::set_xla_gpu_gemm_algorithm_autotune_cache_filename), "",
           "The filename of the gpu gemm algorithmn autotune cache.  Format"
-          "--xla_gpu_gemm_algorithm_autotune_cache_filename=/root/gpu_gemm_algorithm_autotune_cache"
+          "--xla_gpu_gemm_algorithm_autotune_cache_filename=/root/gpu_gemm_autotune_cache.pb"
+          "This cache file should only be used in the same machine"),
+      tensorflow::Flag(
+          "xla_gpu_conv_algorithm_autotune_cache_filename",
+          string_setter_for(
+	     &DebugOptions::set_xla_gpu_conv_algorithm_autotune_cache_filename), "",
+          "The filename of the gpu conv algorithmn autotune cache.  Format"
+          "--xla_gpu_conv_algorithm_autotune_cache_filename=/root/gpu_conv_autotune_cache.pb"
           "This cache file should only be used in the same machine"),
       tensorflow::Flag(
           "xla_fuel", setter_for_xla_fuel, /*default_value_for_display=*/"",

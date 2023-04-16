@@ -283,6 +283,9 @@ message DebugOptions {
   // cuBLAS Gemm algorithm autotune cache filename
   string xla_gpu_gemm_algorithm_autotune_cache_filename = 152;
 
+  // cuDNN Conv algorithm autotune cache filename
+  string xla_gpu_conv_algorithm_autotune_cache_filename = 153;
+
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
   map<string, string> xla_backend_extra_options = 500;
