@@ -19,6 +19,7 @@ limitations under the License.
 #include "absl/time/time.h"
 #include "absl/types/optional.h"
 #include "tensorflow/compiler/xla/service/compiler.h"
+#include "tensorflow/compiler/xla/service/gpu/backend_configs.pb.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_conv_runner.h"
 #include "tensorflow/compiler/xla/service/hlo_instructions.h"
 #include "tensorflow/compiler/xla/service/hlo_module.h"
@@ -29,6 +30,35 @@ limitations under the License.
 
 namespace xla {
 namespace gpu {
+
+using tensorflow::AutotuneResult;
+
+class ConvAutotuneCache {
+  friend class ConvAutotuneCacheSingleton;
+
+ public:
+  ConvAutotuneCache();
+  ~ConvAutotuneCache();
+  static uint64 ConvAutotuneCacheKeyHasher(const se::StreamExecutor* stream_exec,
+                                           const HloInstruction* instr);
+  static ConvAutotuneCacheValue CreateConvAutotuneCacheValue(
+      StatusOr<AutotuneResult> result_or, const se::StreamExecutor* stream_exec,
+      const HloInstruction* instr);
+  bool LookUpCache(uint64 key, ConvAutotuneCacheValue& cache_value);
+  bool AddToCache(uint64 key, const ConvAutotuneCacheValue& cache_value);
+  uint64 cache_hits;
+  uint64 cache_misses;
+
+ private:
+  std::string autotune_cache_filename_;
+  bool in_use_;
+  ConvAutotuneCacheProto conv_autotune_cache_proto_;
+};
+
+class ConvAutotuneCacheSingleton {
+ public:
+  static ConvAutotuneCache* GetInstance();
+};
 
 // Modifies CustomCalls to cudnn convolutions, choosing the best algorithm for
 // each and adding explicit scratch space to the CustomCalls.

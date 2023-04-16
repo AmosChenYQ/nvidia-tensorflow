@@ -28,6 +28,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/gpu/ir_emission_utils.h"
 #include "tensorflow/compiler/xla/service/gpu/stream_executor_util.h"
 #include "tensorflow/compiler/xla/service/hlo_casting_utils.h"
+#include "tensorflow/compiler/xla/service/hlo_instruction.h"
 #include "tensorflow/compiler/xla/service/hlo_instructions.h"
 #include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/util.h"
@@ -50,6 +51,8 @@ using absl::optional;
 using se::DeviceMemoryBase;
 using se::dnn::AlgorithmDesc;
 using tensorflow::AutotuneResult;
+using tensorflow::Hash64;
+using tensorflow::Hash64Combine;
 
 class ScratchAllocator : public se::ScratchAllocator {
  public:
@@ -101,6 +104,7 @@ StatusOr<se::DeviceMemory<uint8>> ScratchAllocator::AllocateBytes(
 
 std::vector<AlgorithmDesc> GetAlgorithms(CudnnConvKind kind,
                                          se::StreamExecutor* stream_exec) {
+  XLA_SCOPED_LOGGING_TIMER_LEVEL("CudnnConvAlgorithmPicker::GetAlgorithms", 2);
   std::vector<AlgorithmDesc> algorithms;
   bool succ = false;
   switch (kind) {
@@ -118,6 +122,9 @@ std::vector<AlgorithmDesc> GetAlgorithms(CudnnConvKind kind,
   }
   DCHECK(succ);
 
+  // TODO(AmosChenYQ): Remove this log after debugging.
+  VLOG(1) << "The number of algorithms for cudnn conv is " << algorithms.size();
+
   return algorithms;
 }
 
@@ -126,9 +133,10 @@ StatusOr<std::vector<se::dnn::ProfileResult>> GetAlgorithms(
     absl::Span<se::DeviceMemoryBase> operand_buffers,
     se::DeviceMemoryBase result_buffer, se::StreamExecutor* stream_exec,
     se::Stream* stream) {
+  XLA_SCOPED_LOGGING_TIMER_LEVEL("RocmConvAlgorithmPicker::GetAlgorithms", 2);
   std::vector<se::dnn::ProfileResult> algorithms;
 
-  TF_ASSIGN_OR_RETURN(se::dnn::ConvolutionKind kind,
+  TF_ASSIGN_OR_RETURN(se::dnn::ConvolutionKind kind __attribute__((unused)),
                       GetDnnConvolutionKind(conv));
 
   TF_ASSIGN_OR_RETURN(se::dnn::DataType dtype, GetDnnDataType(conv));
@@ -247,32 +255,8 @@ StatusOr<bool> CheckRedzones(const se::RedzoneAllocator& allocator,
 }
 #endif
 
-using ConvCacheKey =
-    std::tuple<se::StreamExecutor*,
-               /* conv->ToString(HloPrintOptions::Canonical()) */ std::string>;
+tensorflow::mutex conv_autotune_cache_mu(tensorflow::LINKER_INITIALIZED);
 
-struct ConvCacheStats {
-  int64 cache_hits = 0;
-  int64 cache_misses = 0;
-
-  void LogStats() {
-    VLOG(2) << "Cache hits: " << cache_hits;
-    VLOG(2) << "Cache misses: " << cache_misses;
-  }
-};
-
-ConvCacheKey AutotuneCacheKeyfromInstruction(
-    const HloCustomCallInstruction* conv, se::StreamExecutor* se) {
-  auto options = HloPrintOptions::Canonical();
-  options.set_print_backend_config(true);
-  return std::make_tuple(se, conv->ToString(options));
-}
-
-tensorflow::mutex autotune_cache_lock(tensorflow::LINKER_INITIALIZED);
-auto& autotune_cache TF_GUARDED_BY(autotune_cache_lock) =
-    *new absl::flat_hash_map<ConvCacheKey, AutotuneResult>();
-auto& autotune_cache_stats TF_GUARDED_BY(autotune_cache_lock) =
-    *new ConvCacheStats();
 }  // anonymous namespace
 
 StatusOr<AutotuneResult> GpuConvAlgorithmPicker::PickBestAlgorithm(
@@ -292,16 +276,20 @@ StatusOr<AutotuneResult> GpuConvAlgorithmPicker::PickBestAlgorithm(
   // which can greatly improve both stability (deterministic numeric results
   // within a process for a given input) and performance (2x speedup on some
   // models).
-  ConvCacheKey key = AutotuneCacheKeyfromInstruction(instr, stream_exec_);
-  {
-    tensorflow::mutex_lock lock(autotune_cache_lock);
-    auto it = autotune_cache.find(key);
-    if (it != autotune_cache.end()) {
-      autotune_cache_stats.cache_hits++;
-      return it->second;
-    }
-    autotune_cache_stats.cache_misses++;
-  }
+  // Log conv instr and its operands message for debugging 
+  auto log_conv_instr_and_operands_message =
+      [](const HloCustomCallInstruction* instr) {
+        auto options = HloPrintOptions::Canonical();
+        options.set_print_backend_config(true);
+        VLOG(1) << "Conv instruction in canonical string: ";
+        VLOG(1) << instr->ToString(options);
+        VLOG(1) << "Conv operands are: ";
+        absl::c_for_each(instr->operands(),
+                         [&](HloInstruction* const& operand) {
+                           VLOG(1) << operand->ToString(options);
+                         });
+      };
+  log_conv_instr_and_operands_message(instr);
 
   // Make sure any previous activity on this executor is done. We don't want to
   // interfere with programs that are still running on the GPU.
@@ -322,7 +310,38 @@ StatusOr<AutotuneResult> GpuConvAlgorithmPicker::PickBestAlgorithm(
 
   TF_ASSIGN_OR_RETURN(se::Stream* const stream,
                       allocator->GetStream(stream_exec_->device_ordinal()));
-  StatusOr<AutotuneResult> result_or(InternalError("Unknown platform."));
+  StatusOr<AutotuneResult> result_or;
+  uint64 hashed_cache_key =
+      ConvAutotuneCache::ConvAutotuneCacheKeyHasher(stream_exec_, instr);
+  bool is_found_cache = false;
+  uint64 conv_autotune_requests = 
+      ConvAutotuneCacheSingleton::GetInstance()->cache_hits +
+          ConvAutotuneCacheSingleton::GetInstance()->cache_misses + 1;
+  ConvAutotuneCacheValue cache_value;
+  {
+    tensorflow::mutex_lock cache_lock(conv_autotune_cache_mu);
+    is_found_cache = ConvAutotuneCacheSingleton::GetInstance()->LookUpCache(
+        hashed_cache_key, cache_value);
+  }
+  if (is_found_cache) {
+    ConvAutotuneCacheSingleton::GetInstance()->cache_hits++;
+    VLOG(1) << "Autotuning cache hits/(hits + misses): "
+            << ConvAutotuneCacheSingleton::GetInstance()->cache_hits << "/"
+            << conv_autotune_requests;
+    // return error status or conv autotune result
+    if (cache_value.status_or_result_case() ==
+        ConvAutotuneCacheValue::kStatus) {
+      return se::port::Status(cache_value.status().code(),
+                              cache_value.status().message());
+    } else if (cache_value.status_or_result_case() ==
+               ConvAutotuneCacheValue::kConvAutotuneResult) {
+      return cache_value.conv_autotune_result();
+    }
+  }
+  ConvAutotuneCacheSingleton::GetInstance()->cache_misses++;
+  VLOG(1) << "Autotuning cache misses/(hits + misses): "
+          << ConvAutotuneCacheSingleton::GetInstance()->cache_misses << "/"
+          << conv_autotune_requests;
   // Check StreamExecutor on which platform it is. ROCm and Cuda implementation
   // have diverged. Specifically, we need to make sure redzone allocator related
   // utilities are not used in ROCm routine
@@ -332,11 +351,17 @@ StatusOr<AutotuneResult> GpuConvAlgorithmPicker::PickBestAlgorithm(
 #if (defined(GOOGLE_CUDA) && GOOGLE_CUDA)
     result_or = PickBestAlgorithmNoCacheCuda(instr, allocator, stream);
 #endif
+  } else {
+    // If platform kind is neither Rocm nor Cuda, return error status of unknown
+    // platform.
+    return InternalError("Unknown platform.");
   }
 
-  if (result_or.ok()) {
-    tensorflow::mutex_lock lock(autotune_cache_lock);
-    CHECK(autotune_cache.insert({key, result_or.ValueOrDie()}).second);
+  {
+    tensorflow::mutex_lock cache_lock(conv_autotune_cache_mu);
+    CHECK(ConvAutotuneCacheSingleton::GetInstance()->AddToCache(
+        hashed_cache_key, ConvAutotuneCache::CreateConvAutotuneCacheValue(
+                              result_or, stream_exec_, instr)));
   }
   return result_or;
 }
@@ -430,8 +455,9 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
   const bool crash_on_checking_failure =
       debug_options.xla_gpu_crash_on_verification_failures();
 
-  const auto canonical_hlo =
-      std::get<1>(AutotuneCacheKeyfromInstruction(instr, stream_exec_));
+  auto options = HloPrintOptions::Canonical();
+  options.set_print_backend_config(true);
+  const auto canonical_hlo = instr->ToString(options);
 
   string blas_version;
   if (auto* blas = stream_exec_->AsBlas()) {
@@ -472,6 +498,10 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
                    &scratch_allocator, stream, options);
 
     if (!launch_status.ok()) {
+      // TODO(AmosChenYQ): Remove this after figuring out why getting fewer
+      // results than need to profile
+      VLOG(1) << "Algorithm " << AlgorithmToString(alg)
+              << " warm up's launch is not ok";
       continue;
     }
 
@@ -481,10 +511,22 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
                    &scratch_allocator, stream, options);
 
     if (!launch_status.ok()) {
+      // TODO(AmosChenYQ): Remove this after figuring out why getting fewer
+      // results than need to profile
+      VLOG(1) << "Algorithm " << AlgorithmToString(alg)
+              << " profile's launch is not ok";
       continue;
     }
 
     if (!profile_result.is_valid()) {
+      // TODO(AmosChenYQ): Remove this after figuring out why getting fewer
+      // results than need to profile
+      VLOG(1) << "Algorithm " << AlgorithmToString(alg)
+              << " profile result is not valid";
+      VLOG(1) << std::boolalpha << "Algorithm " << AlgorithmToString(alg)
+              << " exceeds limits "
+              << (profile_result.elapsed_time_in_ms() ==
+                  std::numeric_limits<float>::max());
       continue;
     }
 
@@ -579,6 +621,10 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
     }
   }
 
+  // TODO(AmosChenYQ): Remove this after figuring out why getting fewer 
+  // results than need to profile
+  VLOG(1) << "The number of profile result is " << profile_results.size();
+
   // Log the autotuning result.
   {
     tensorflow::AutotuningLog log;
@@ -644,6 +690,8 @@ GpuConvAlgorithmPicker::PickBestAlgorithmNoCacheCuda(
 
   auto selected_result = filtered_results.begin();
   if (!RequireCudnnDeterminism()) {
+    VLOG(1) << "There is no need to guarantee the determinism of the cudnn "
+               "algorithm used, the least time-consuming algorithm is used";
     selected_result = absl::c_min_element(
         filtered_results,
         [](const AutotuneResult& lhs, const AutotuneResult& rhs) {
@@ -800,11 +848,10 @@ StatusOr<bool> GpuConvAlgorithmPicker::RunOnInstruction(HloInstruction* instr) {
   HloInstruction* new_call = computation->AddInstruction(
       instr->CloneWithNewOperands(new_call_shape, instr->operands()));
 
-  VLOG(2) << "Replacing convolution " << instr->ToString() << " with "
-          << new_call->ToString();
-
   TF_RETURN_IF_ERROR(new_call->set_backend_config(backend_config));
 
+  VLOG(2) << "Replacing convolution " << instr->ToString() << " with "
+          << new_call->ToString();
   // Repackage new_call so it has the same shape as the original call, namely
   // (conv_result, u8[0]).
   HloInstruction* new_tuple =
@@ -850,12 +897,97 @@ StatusOr<bool> GpuConvAlgorithmPicker::Run(HloModule* module) {
     changed |= result;
   }
 
-  {
-    tensorflow::mutex_lock lock(autotune_cache_lock);
-    autotune_cache_stats.LogStats();
-  }
-
   return changed;
+}
+
+/* static */ ConvAutotuneCache* ConvAutotuneCacheSingleton::GetInstance() {
+  static std::shared_ptr<ConvAutotuneCache> conv_autotune_cache_ptr =
+      std::make_shared<ConvAutotuneCache>();
+  return conv_autotune_cache_ptr.get();
+}
+
+/* static */ uint64 ConvAutotuneCache::ConvAutotuneCacheKeyHasher(
+    const se::StreamExecutor* stream_exec, const HloInstruction* instr) {
+  auto options = HloPrintOptions::Canonical();
+  options.set_print_backend_config(true);
+  uint64 hashed_instr = Hash64(instr->ToString(options));
+  uint64 hashed_platform_name = Hash64(stream_exec->platform()->Name());
+  return Hash64Combine(hashed_instr, hashed_platform_name);
+}
+
+/* static */ ConvAutotuneCacheValue
+ConvAutotuneCache::CreateConvAutotuneCacheValue(
+    StatusOr<AutotuneResult> result_or, const se::StreamExecutor* stream_exec,
+    const HloInstruction* instr) {
+  auto options = HloPrintOptions::Canonical();
+  options.set_print_backend_config(true);
+  ConvAutotuneCacheValue conv_autotune_cache;
+  conv_autotune_cache.set_instr(instr->ToString(options));
+  conv_autotune_cache.set_platform_name(stream_exec->platform()->Name());
+  if (result_or.ok()) {
+    (*conv_autotune_cache.mutable_conv_autotune_result()) =
+        result_or.ValueOrDie();
+  } else {
+    Status s = result_or.status();
+    conv_autotune_cache.mutable_status()->set_code(
+        static_cast<tensorflow::error::Code>(s.code()));
+    conv_autotune_cache.mutable_status()->set_message(s.error_message());
+  }
+  return std::move(conv_autotune_cache);
+}
+
+bool ConvAutotuneCache::LookUpCache(uint64 key,
+                                    ConvAutotuneCacheValue& cache_value) {
+  if (conv_autotune_cache_proto_.conv_autotune_cache_map().count(key) > 0) {
+    cache_value = conv_autotune_cache_proto_.conv_autotune_cache_map().at(key); 
+    return true;
+  }
+  return false;
+}
+
+bool ConvAutotuneCache::AddToCache(uint64 key,
+                                   const ConvAutotuneCacheValue& cache_value) {
+  if (conv_autotune_cache_proto_.conv_autotune_cache_map().count(key) > 0) {
+    return false;
+  }
+  return conv_autotune_cache_proto_.mutable_conv_autotune_cache_map()
+      ->insert({key, cache_value})
+      .second;
+}
+
+ConvAutotuneCache::ConvAutotuneCache() {
+  VLOG(1) << "ConvAutotune constructor";
+  cache_hits = 0;
+  cache_misses = 0;
+  autotune_cache_filename_ =
+      GetDebugOptionsFromFlags()
+          .xla_gpu_conv_algorithm_autotune_cache_filename();
+  in_use_ = !autotune_cache_filename_.empty();
+  if (in_use_ &&
+      tensorflow::Env::Default()->FileExists(autotune_cache_filename_).ok()) {
+    VLOG(1) << "Loading conv autotune cache from " << autotune_cache_filename_;
+    std::string serialized_proto_str;
+    tensorflow::ReadFileToString(tensorflow::Env::Default(),
+                                 autotune_cache_filename_,
+                                 &serialized_proto_str);
+    conv_autotune_cache_proto_.ParseFromString(serialized_proto_str);
+    VLOG(1) << "Proto serialized result:\n"
+            << conv_autotune_cache_proto_.DebugString();
+  }
+}
+
+ConvAutotuneCache::~ConvAutotuneCache() {
+  VLOG(1) << "ConvAutotune destructor";
+  if (in_use_ && !autotune_cache_filename_.empty()) {
+    VLOG(1) << "Commiting conv autotune cache to " << autotune_cache_filename_;
+    std::string serialized_proto_str;
+    conv_autotune_cache_proto_.SerializeToString(&serialized_proto_str);
+    tensorflow::WriteStringToFile(tensorflow::Env::Default(),
+                                  autotune_cache_filename_,
+                                  serialized_proto_str);
+    VLOG(1) << "Proto serialized result:\n"
+            << conv_autotune_cache_proto_.DebugString();
+  }
 }
 
 }  // namespace gpu

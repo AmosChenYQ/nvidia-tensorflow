@@ -51,7 +51,11 @@ tf_proto_library_cc(
     name = "backend_configs",
     srcs = ["backend_configs.proto"],
     cc_api_version = 2,
-    protodeps = ["//tensorflow/compiler/xla:xla_data_proto"],
+    protodeps = [
+      "//tensorflow/compiler/xla:xla_data_proto",
+      "//tensorflow/core:autotuning_proto",
+      "//tensorflow/core:error_codes_proto"
+    ],
 )
 
 cc_library(
