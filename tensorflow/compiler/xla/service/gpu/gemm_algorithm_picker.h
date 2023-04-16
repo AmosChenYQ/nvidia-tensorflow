@@ -35,11 +35,11 @@ class GemmAutotuneCache {
   GemmAutotuneCache();
   ~GemmAutotuneCache();
   static uint64 GemmAutotuneCacheKeyHasher(
-      se::StreamExecutor* stream_exec, const HloInstruction* instr,
+      const se::StreamExecutor* stream_exec, const HloInstruction* instr,
       const HloInstruction* lhs, const HloInstruction* rhs,
       const GemmBackendConfig& gemm_config);
   static GemmAutotuneCacheValue CreateGemmAutotuneCacheValue(
-      se::StreamExecutor* stream_exec, const HloInstruction* instr,
+      const se::StreamExecutor* stream_exec, const HloInstruction* instr,
       const HloInstruction* Lhs, const HloInstruction* rhs,
       const GemmBackendConfig& gemm_config,
       absl::optional<se::blas::AlgorithmType> result);

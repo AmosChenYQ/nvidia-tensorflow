@@ -40,10 +40,9 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
+using tensorflow::AutotuneResult;
 using tensorflow::Hash64;
 using tensorflow::Hash64Combine;
-
-using tensorflow::AutotuneResult;
 
 static tensorflow::mutex gemm_autotune_cache_mu(tensorflow::LINKER_INITIALIZED);
 // Experimentally tries to pick the best algorithm for the given gemm.
@@ -107,7 +106,7 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoUncachedGemmAutotune(
     AutotuneResult& result = profile_results.back();
     result.mutable_gemm()->set_algorithm(algorithm);
 
-    VLOG(1) << "cublas gemm algorithm " << algorithm << " took "
+    VLOG(3) << "cublas gemm algorithm " << algorithm << " took "
             << profile_result.elapsed_time_in_ms() << "ms" << std::endl;
 
     *result.mutable_run_time() = tensorflow::proto_utils::ToDurationProto(
@@ -183,7 +182,7 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoUncachedGemmAutotune(
     return {best_result->gemm().algorithm()};
   }
 
-  VLOG(1) << "Unable to autotune cuBLAS gemm on stream " << stream
+  VLOG(3) << "Unable to autotune cuBLAS gemm on stream " << stream
           << " none of the " << algorithms.size() << " ran successfully";
   return {absl::nullopt};
 }
@@ -201,41 +200,40 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
   GemmBackendConfig gemm_config =
       instr->backend_config<GemmBackendConfig>().ValueOrDie();
 
-  auto log_gemm_instr_and_operands_msg = [](const HloInstruction* instr,
+  auto log_gemm_instr_and_operands_message = [](const HloInstruction* instr,
                                            const HloInstruction* lhs,
                                            const HloInstruction* rhs) {
     auto options = HloPrintOptions::Canonical();
     options.set_print_backend_config(true);
     VLOG(1) << "Gemm instr in canonical string:";
-    VLOG(1) << instr->ToString();
+    VLOG(1) << instr->ToString(options);
     VLOG(1) << "Lhs instr in canonical string:";
-    VLOG(1) << lhs->ToString();
+    VLOG(1) << lhs->ToString(options);
     VLOG(1) << "Rhs instr in canonical string:";
-    VLOG(1) << rhs->ToString();
+    VLOG(1) << rhs->ToString(options);
   };
-  log_gemm_instr_and_operands_msg(instr, lhs, rhs);
-  auto hashed_cache_key = GemmAutotuneCache::GemmAutotuneCacheKeyHasher(
+  log_gemm_instr_and_operands_message(instr, lhs, rhs);
+
+  uint64 hashed_cache_key = GemmAutotuneCache::GemmAutotuneCacheKeyHasher(
     stream->parent(), instr, lhs, rhs, gemm_config);
-  VLOG(1) << "hashed_cache_key: " << hashed_cache_key;
+  VLOG(1) << "hashed_cache_key of gemm: " << hashed_cache_key;
 
   tensorflow::mutex_lock cache_lock(gemm_autotune_cache_mu);
   absl::optional<se::blas::AlgorithmType> result;
   bool is_found_cache = GemmAutotuneCacheSingleton::GetInstance()->LookupCache(
       hashed_cache_key, result);
-  int64 gemm_autotune_requests =
+  uint64 gemm_autotune_requests =
       GemmAutotuneCacheSingleton::GetInstance()->cache_hits +
-      GemmAutotuneCacheSingleton::GetInstance()->cache_misses;
-  if (gemm_autotune_requests) {
-    VLOG(1) << "Autotuning cache hits/(hits + misses): "
-            << GemmAutotuneCacheSingleton::GetInstance()->cache_hits << "/"
-            << gemm_autotune_requests;
-  }
+      GemmAutotuneCacheSingleton::GetInstance()->cache_misses + 1;
 
   if (is_found_cache) {
     GemmAutotuneCacheSingleton::GetInstance()->cache_hits++;
     VLOG(1) << "Autotuning cache hit, using algorithm: "
             << (result.has_value() ? absl::StrCat(result.value())
                                    : "<generic>");
+    VLOG(1) << "Autotuning cache hits/(hits + misses): "
+            << GemmAutotuneCacheSingleton::GetInstance()->cache_hits << "/"
+            << gemm_autotune_requests;
     return result;
   }
   GemmAutotuneCacheSingleton::GetInstance()->cache_misses++;
@@ -359,14 +357,14 @@ StatusOr<bool> GemmAlgorithmPicker::Run(HloModule* module) {
 }
 
 /* static */ uint64 GemmAutotuneCache::GemmAutotuneCacheKeyHasher(
-    se::StreamExecutor* stream_exec, const HloInstruction* instr,
+    const se::StreamExecutor* stream_exec, const HloInstruction* instr,
     const HloInstruction* lhs, const HloInstruction* rhs,
     const GemmBackendConfig& gemm_config) {
   auto options = HloPrintOptions::Canonical();
   options.set_print_backend_config(true);
-  uint64 hashed_instr = Hash64(instr->ToString());
-  uint64 hashed_lhs = Hash64(lhs->ToString());
-  uint64 hashed_rhs = Hash64(rhs->ToString());
+  uint64 hashed_instr = Hash64(instr->ToString(options));
+  uint64 hashed_lhs = Hash64(lhs->ToString(options));
+  uint64 hashed_rhs = Hash64(rhs->ToString(options));
   uint64 hashed_platform_name = Hash64(stream_exec->platform()->Name());
   uint64 hashed_gemm_config = Hash64(gemm_config.DebugString());
   return Hash64Combine(hashed_instr, hashed_lhs, hashed_rhs,
@@ -375,7 +373,7 @@ StatusOr<bool> GemmAlgorithmPicker::Run(HloModule* module) {
 
 /* static */ GemmAutotuneCacheValue
 GemmAutotuneCache::CreateGemmAutotuneCacheValue(
-    se::StreamExecutor* stream_exec, const HloInstruction* instr,
+    const se::StreamExecutor* stream_exec, const HloInstruction* instr,
     const HloInstruction* lhs, const HloInstruction* rhs,
     const GemmBackendConfig& gemm_config,
     absl::optional<se::blas::AlgorithmType> result) {
@@ -383,9 +381,9 @@ GemmAutotuneCache::CreateGemmAutotuneCacheValue(
   cache_value_to_add.set_platform_name(stream_exec->platform()->Name());
   auto options = HloPrintOptions::Canonical();
   options.set_print_backend_config(true);
-  *cache_value_to_add.mutable_instr() = instr->ToString();
-  *cache_value_to_add.mutable_lhs() = lhs->ToString();
-  *cache_value_to_add.mutable_rhs() = rhs->ToString();
+  *cache_value_to_add.mutable_instr() = instr->ToString(options);
+  *cache_value_to_add.mutable_lhs() = lhs->ToString(options);
+  *cache_value_to_add.mutable_rhs() = rhs->ToString(options);
   cache_value_to_add.mutable_gemm_backend_config()->CopyFrom(gemm_config);
   if (result.has_value()) {
     cache_value_to_add.set_selected_algorithm(result.value());
@@ -431,7 +429,7 @@ GemmAutotuneCache::GemmAutotuneCache() {
   in_use_ = !autotune_cache_filename_.empty();
   if (in_use_ &&
       tensorflow::Env::Default()->FileExists(autotune_cache_filename_).ok()) {
-    VLOG(1) << "Loading autotune cache from " << autotune_cache_filename_;
+    VLOG(1) << "Loading gemm autotune cache from " << autotune_cache_filename_;
     std::string serialized_proto_str;
     tensorflow::ReadFileToString(tensorflow::Env::Default(),
                                  autotune_cache_filename_,
@@ -446,7 +444,7 @@ GemmAutotuneCache::GemmAutotuneCache() {
 GemmAutotuneCache::~GemmAutotuneCache() {
   VLOG(1) << "GemmAutotuneCache destructor";
   if (in_use_ && !autotune_cache_filename_.empty()) {
-    VLOG(1) << "Commiting autotune cache to " << autotune_cache_filename_;
+    VLOG(1) << "Commiting gemm autotune cache to " << autotune_cache_filename_;
     std::string serialized_proto_str;
     gemm_autotune_cache_proto_.SerializeToString(&serialized_proto_str);
     tensorflow::WriteStringToFile(tensorflow::Env::Default(),
