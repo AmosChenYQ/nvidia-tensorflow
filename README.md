@@ -110,6 +110,25 @@ export CC_OPT_FLAGS="-march=native -mtune=native"
 yes "" | ./configure
 ```
 
+#### Configure for AmosChenYQ customized TensorFlow
+
+```
+cd tensorflow
+export TF_ENABLE_XLA=1
+export TF_CUDA_COMPUTE_CAPABILITIES=8.6
+export TF_NCCL_VERSION=2
+export TF_NEED_HDFS=0
+export TF_CUDNN_VERSION=8
+export TF_TENSORRT_VERSION=8
+export TF_CUDA_VERSION=11.4
+export TF_NEED_CUDA=1
+export TF_CUBLAS_VERSION=11
+export TF_CUDA_PATHS=/usr,/usr/local/cuda
+export TF_NEED_TENSORRT=1
+export CC_OPT_FLAGS="-march=native -mtune=native"
+yes "" | ./configure
+```
+
 ### Build and install TensorFlow
 
 ```
