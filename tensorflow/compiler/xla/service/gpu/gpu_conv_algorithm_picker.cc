@@ -15,7 +15,7 @@ limitations under the License.
 
 #include "tensorflow/compiler/xla/service/gpu/gpu_conv_algorithm_picker.h"
 
-#include "absl/algorithm/container.h"
+// TODO(AmosChenYQ): Check if container.h can be removed.
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/time/time.h"
@@ -971,8 +971,6 @@ ConvAutotuneCache::ConvAutotuneCache() {
                                  autotune_cache_filename_,
                                  &serialized_proto_str);
     conv_autotune_cache_proto_.ParseFromString(serialized_proto_str);
-    VLOG(1) << "Proto serialized result:\n"
-            << conv_autotune_cache_proto_.DebugString();
   }
 }
 
@@ -985,8 +983,6 @@ ConvAutotuneCache::~ConvAutotuneCache() {
     tensorflow::WriteStringToFile(tensorflow::Env::Default(),
                                   autotune_cache_filename_,
                                   serialized_proto_str);
-    VLOG(1) << "Proto serialized result:\n"
-            << conv_autotune_cache_proto_.DebugString();
   }
 }
 
