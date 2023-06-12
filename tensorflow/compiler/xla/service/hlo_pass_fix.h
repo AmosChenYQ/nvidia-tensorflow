@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <algorithm>
 
+#include "absl/strings/str_cat.h"
 #include "tensorflow/compiler/xla/service/hlo_module.h"
 #include "tensorflow/compiler/xla/service/hlo_module_group.h"
 #include "tensorflow/compiler/xla/status_macros.h"
@@ -35,6 +36,7 @@ class HloPassFix : public Pass {
   explicit HloPassFix(Args&&... args) : Pass(args...) {}
 
   StatusOr<bool> Run(HloModule* module) override {
+    // XLA_SCOPED_LOGGING_TIMER(absl::StrCat("HloPassFix running for pass ", Pass::name()));
     bool changed = false;
     bool changed_this_iteration = true;
     int64 iteration_count = 0;

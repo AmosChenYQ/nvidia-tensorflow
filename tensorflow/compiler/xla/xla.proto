@@ -286,6 +286,9 @@ message DebugOptions {
   // cuDNN Conv algorithm autotune cache filename
   string xla_gpu_conv_algorithm_autotune_cache_filename = 153;
 
+  // Paths to serialize/deserilize HLO module before/after hlo optimization pass pipeline
+  string xla_gpu_optimized_hlo_module_dir = 154;
+
   // Extra options to pass to the compilation backend (e.g. LLVM); specific
   // interpretation of these values is left to the backend.
   map<string, string> xla_backend_extra_options = 500;

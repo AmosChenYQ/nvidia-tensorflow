@@ -459,10 +459,10 @@ XlaCompiler::XlaCompiler(XlaCompiler::Options options)
       device_(new XlaCompilationDevice(SessionOptions(), options_.device_type)),
       device_mgr_(absl::WrapUnique(device_)) {
   VLOG(1) << "XlaCompiler: "
-          << "Device: " << device_
-          << "Device_allocator: " << options_.device_allocator
-          << "Device_ordinal: " << options_.device_ordinal
-          << "options_.device_type : " << options_.device_type;
+          << " Device: " << device_
+          << " Device_allocator: " << options_.device_allocator
+          << " Device_ordinal: " << options_.device_ordinal
+          << " options_.device_type : " << options_.device_type;
   if (options.device_ordinal >= 0) {
     VLOG(1) << "Stream: " << options_.device_allocator->GetStream(options_.device_ordinal).ValueOrDie();
   }

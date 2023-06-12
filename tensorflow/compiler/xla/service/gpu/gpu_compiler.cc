@@ -29,10 +29,10 @@ limitations under the License.
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "tensorflow/compiler/xla/debug_options_flags.h"
 #include "tensorflow/compiler/xla/protobuf_util.h"
 #include "tensorflow/compiler/xla/service/algebraic_simplifier.h"
 #include "tensorflow/compiler/xla/service/all_reduce_combiner.h"
-#include "tensorflow/compiler/xla/service/softmax_expander.h"
 #include "tensorflow/compiler/xla/service/batchnorm_expander.h"
 #include "tensorflow/compiler/xla/service/buffer_assignment.h"
 #include "tensorflow/compiler/xla/service/call_inliner.h"
@@ -44,8 +44,8 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/dynamic_index_splitter.h"
 #include "tensorflow/compiler/xla/service/flatten_call_graph.h"
 #include "tensorflow/compiler/xla/service/gpu/alias_passthrough_params.h"
-#include "tensorflow/compiler/xla/service/gpu/cudnn_softmax_rewriter.h"
 #include "tensorflow/compiler/xla/service/gpu/cudnn_batchnorm_rewriter.h"
+#include "tensorflow/compiler/xla/service/gpu/cudnn_softmax_rewriter.h"
 #include "tensorflow/compiler/xla/service/gpu/fusion_merger.h"
 #include "tensorflow/compiler/xla/service/gpu/gemm_rewriter.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_constants.h"
@@ -74,6 +74,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/gpu/thunk_schedule.h"
 #include "tensorflow/compiler/xla/service/gpu/tree_reduction_rewriter.h"
 #include "tensorflow/compiler/xla/service/gpu/variadic_op_splitter.h"
+#include "tensorflow/compiler/xla/service/hlo.pb.h"
 #include "tensorflow/compiler/xla/service/hlo_computation.h"
 #include "tensorflow/compiler/xla/service/hlo_constant_folding.h"
 #include "tensorflow/compiler/xla/service/hlo_cse.h"
@@ -93,6 +94,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/rng_expander.h"
 #include "tensorflow/compiler/xla/service/slice_sinker.h"
 #include "tensorflow/compiler/xla/service/slow_operation_alarm.h"
+#include "tensorflow/compiler/xla/service/softmax_expander.h"
 #include "tensorflow/compiler/xla/service/sort_simplifier.h"
 #include "tensorflow/compiler/xla/service/stable_sort_expander.h"
 #include "tensorflow/compiler/xla/service/transpose_folding.h"
@@ -109,6 +111,7 @@ limitations under the License.
 #include "tensorflow/core/lib/io/path.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/logging.h"
+#include "tensorflow/core/platform/mutex.h"
 #include "tensorflow/core/platform/regexp.h"
 #include "tensorflow/core/platform/stream_executor_no_cuda.h"
 #include "tensorflow/core/platform/subprocess.h"
@@ -118,6 +121,173 @@ limitations under the License.
 
 namespace xla {
 namespace gpu {
+
+// Use two-level cache. The underlying level cache saves hlo module proto
+// corresponding to different shapes of the same cluser(with the same name but
+// different module hash) to disk files in OptimizedHloModuleCacheProto. The upper
+// level cache saves all hlo module names and their corresponding
+// OptimizedHloModuleCacheProto which is cached in files to hash map in memory.
+static tensorflow::mutex cache_in_memory_mu(tensorflow::LINKER_INITIALIZED);
+
+OptimizedHloModuleCache::OptimizedHloModuleCache() {
+  VLOG(1) << "OptimizedHloModuleCache constructor";
+  optimized_module_dir_ =
+      GetDebugOptionsFromFlags().xla_gpu_optimized_hlo_module_dir();
+  if (has_dump_dir() &&
+      !tensorflow::Env::Default()->IsDirectory(optimized_module_dir_).ok()) {
+    optimized_module_dir_.clear();
+  }
+}
+
+OptimizedHloModuleCache::~OptimizedHloModuleCache() {
+  VLOG(1) << "OptimizedHloModuleCache destructor";
+  VLOG(1) << "Optimized module dir is: " << optimized_module_dir_;
+  if (has_dump_dir() && tensorflow::Env::Default()->IsDirectory(optimized_module_dir_).ok()) {
+    VLOG(1) << "Will dump back memory cache back to files";
+    // tensorflow::mutex_lock lock(cache_in_memory_mu);
+    for (MapIterInMem it = cache_in_memory_.begin();
+         it != cache_in_memory_.end(); ++it) {
+      std::string optimized_module_filename =
+          absl::StrCat(optimized_module_dir_, "/", it->first, ".pb");
+      VLOG(1) << "Write module back from " << it->first << " back to "
+              << optimized_module_filename;
+      std::string serialized_proto_str;
+      it->second.SerializeToString(&serialized_proto_str);
+      tensorflow::WriteStringToFile(tensorflow::Env::Default(),
+                                    optimized_module_filename,
+                                    serialized_proto_str);
+    }
+  }
+}
+
+bool OptimizedHloModuleCache::TryLoadFromFile(const HloModule* const module) {
+  if (!has_dump_dir()) {
+    return false;
+  }
+  std::string module_name = module->name();
+  std::string optimized_module_filename =
+      absl::StrCat(optimized_module_dir_, "/", module_name, ".pb");
+  if (!tensorflow::Env::Default()->FileExists(optimized_module_filename).ok()) {
+    VLOG(1) << "Can not find pb file for module " << module->name()
+            << " file is " << optimized_module_filename;
+    return false;
+  }
+  std::string serialized_proto_str;
+  OptimizedHloModuleCacheProto optimized_module_cache_proto;
+  if (!tensorflow::ReadFileToString(tensorflow::Env::Default(),
+                                    optimized_module_filename,
+                                    &serialized_proto_str)
+           .ok() ||
+      !optimized_module_cache_proto.ParseFromString(serialized_proto_str)) {
+    VLOG(1) << "Read or parse file error for module " << module->name()
+            << " file is " << optimized_module_filename;
+    return false;
+  }
+  {
+    // tensorflow::mutex_lock lock(cache_in_memory_mu);
+    bool insert_ok = cache_in_memory_.insert({module_name, optimized_module_cache_proto}).second;
+    
+  }
+  return true;
+}
+
+OptimizedHloModuleCache::LoadStatus OptimizedHloModuleCache::TryLoadFromMem(
+    const HloModule* const module,
+    std::unique_ptr<HloModule>* optimized_module) {
+  OptimizedHloModuleCache::MapIterInMem iter;
+  {
+    // tensorflow::mutex_lock lock(cache_in_memory_mu);
+    iter = cache_in_memory_.find(module->name());
+  }
+  *optimized_module = nullptr;
+  if (iter == cache_in_memory_.end()) {
+    VLOG(1) << "Try load from mem but proto not in mem for module name "
+            << module->name();
+    return LoadStatus::kProtoNotInMem;
+  } else if (!iter->second.cache_map().count(module->Hash())) {
+    VLOG(1) << "Proto found for module " << module->name()
+            << " but not found with hash " << module->Hash();
+    return LoadStatus::kNotFoundInMem;
+  }
+  StatusOr<std::unique_ptr<HloModule>> status_or = HloModule::CreateFromProto(
+      iter->second.cache_map().at(module->Hash()), module->config());
+  if (!status_or.ok()) {
+    VLOG(1) << "Create optimized hlo module from proto not ok for module "
+            << module->name();
+    return LoadStatus::kNotFoundInMem;
+  }
+  *optimized_module = std::move(status_or.ValueOrDie());
+  return LoadStatus::kFoundInMem;
+}
+
+std::unique_ptr<HloModule> OptimizedHloModuleCache::MaybeLoadOptimizedModule(
+    const HloModule* const module) {
+  XLA_SCOPED_LOGGING_TIMER(
+      "OptimizedHloModuleCache::MaybeLoadOptimizedModule for module " +
+      module->name());
+  std::unique_ptr<HloModule> optimized_module = nullptr;
+  LoadStatus status = TryLoadFromMem(module, &optimized_module);
+  if (status == LoadStatus::kProtoNotInMem && TryLoadFromFile(module)) {
+    VLOG(1) << "Try to load from file for module " << module->name();
+    LoadStatus retry_status = TryLoadFromMem(module, &optimized_module);
+    if (retry_status == LoadStatus::kProtoNotInMem) {
+      VLOG(1) << "After trying to load from file still not found in mem for "
+                 "module " << module->name();
+    }
+  }
+  if(optimized_module) {
+    VLOG(1) << "After loading from mem or file optimized module is "
+            << optimized_module->name();
+  }
+  return std::move(optimized_module);
+}
+
+bool OptimizedHloModuleCache::FlushOptimizedModuleToMem(
+    const HloModule* const optimized_module, uint64 raw_module_hash) {
+  bool flush_ok = false;
+  OptimizedHloModuleCache::MapIterInMem iter;
+  {
+    // tensorflow::mutex_lock lock(cache_in_memory_mu);
+    iter = cache_in_memory_.find(optimized_module->name());
+  }
+  if (iter == cache_in_memory_.end()) {
+    OptimizedHloModuleCacheProto new_module_cache_proto;
+    bool insert_proto_ok = new_module_cache_proto.mutable_cache_map()
+                               ->insert({raw_module_hash, optimized_module->ToProto()})
+                               .second;
+    if (insert_proto_ok) {
+      flush_ok =
+          cache_in_memory_.insert({optimized_module->name(), new_module_cache_proto})
+              .second;
+    }
+    VLOG(1) << "Flush proto to mem hash " << raw_module_hash << " module "
+            << optimized_module->name() << " hash " << optimized_module->Hash()
+            << " insert proto " << (insert_proto_ok ? " ok" : " not ok")
+            << "flush " << (flush_ok ? " ok" : " not ok");
+  } else {
+    flush_ok = iter->second.mutable_cache_map()
+                   ->insert({raw_module_hash, optimized_module->ToProto()})
+                   .second;
+    VLOG(1) << "Flush proto to mem hash " << raw_module_hash << " module "
+            << optimized_module->name() << " hash " << optimized_module->Hash()
+            << (flush_ok ? " ok" : " not ok");
+  }
+
+
+  for (auto&& mem_it : cache_in_memory_) {
+    VLOG(1) << optimized_module->name() << " " << mem_it.first;
+    for (auto&& proto_it : *mem_it.second.mutable_cache_map()) {
+      VLOG(1) << optimized_module->name() << " " << proto_it.first;
+    }
+  }
+  return flush_ok;
+}
+
+/* static */ OptimizedHloModuleCache* OptimizedHloModuleCacheSingleton::GetInstance() {
+  static std::shared_ptr<OptimizedHloModuleCache> optimized_hlo_module_cache_ptr =
+      std::make_shared<OptimizedHloModuleCache>();
+  return optimized_hlo_module_cache_ptr.get();
+}
 
 GpuCompiler::GpuCompiler(se::Platform::Id platform_id,
                          const char* target_triple, const char* data_layout)
@@ -132,6 +302,10 @@ Status GpuCompiler::OptimizeHloModule(
     HloModule* hlo_module, se::StreamExecutor* stream_exec,
     se::DeviceMemoryAllocator* device_allocator) {
   {
+    XLA_SCOPED_LOGGING_TIMER(
+        "GpuCompiler::OptimizeHloModule optimization pass pipeline for "
+        "module " +
+        hlo_module->name());
     HloPassPipeline pipeline("optimization");
     pipeline.AddInvariantChecker<HloVerifier>(/*layout_sensitive=*/false,
                                               /*allow_mixed_precision=*/false);
@@ -248,7 +422,7 @@ Status GpuCompiler::OptimizeHloModule(
     // modifications.
     pipeline.AddPass<WhileLoopTripCountAnnotator>();
     TF_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
-  }
+  } // End of optimization pass scope
 
   // Run target-specific HLO optimization passes for convolution
   // canonicalization.
@@ -256,6 +430,10 @@ Status GpuCompiler::OptimizeHloModule(
       hlo_module, stream_exec, device_allocator));
 
   {
+    XLA_SCOPED_LOGGING_TIMER(
+        "GpuCompiler::OptimizeHloModule layout assignment pass pipeline for "
+        "module " +
+        hlo_module->name());
     // Run layout assignment in a separate pipeline from
     // "post-layout-assignment" because we want everything after layout
     // assignment to have a layout-sensitive invariant-checker, but
@@ -272,11 +450,20 @@ Status GpuCompiler::OptimizeHloModule(
     TF_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
   }
 
-  // Run target-specific HLO optimization passes after layout assignment.
-  TF_RETURN_IF_ERROR(OptimizeHloPostLayoutAssignment(hlo_module, stream_exec,
-                                                     device_allocator));
+  {
+    XLA_SCOPED_LOGGING_TIMER(
+        "GpuCompiler::OptimizeHloModule post layout assignment pass pipeline "
+        "for module " +
+        hlo_module->name());
+    // Run target-specific HLO optimization passes after layout assignment.
+    TF_RETURN_IF_ERROR(OptimizeHloPostLayoutAssignment(hlo_module, stream_exec,
+                                                       device_allocator));
+  }
 
   {
+    XLA_SCOPED_LOGGING_TIMER(
+        "GpuCompiler::OptimizeHloModule fusion pass pipeline for module " +
+        hlo_module->name());
     HloPassFix<HloPassPipeline> fusion("fusion");
     // We try to split variadic ops with many parameters into several such ops
     // to avoid exceeding the parameter space.
@@ -305,12 +492,17 @@ Status GpuCompiler::OptimizeHloModule(
     TF_RETURN_IF_ERROR(horizontal_fusion.Run(hlo_module).status());
   }
   {
+    XLA_SCOPED_LOGGING_TIMER(
+        "GpuCompiler::OptimizeHloModule all reduce combiner pass pipeline for "
+        "module " +
+        hlo_module->name());
     HloPassPipeline pipeline("all_reduce_combiner");
     pipeline.AddPass<AllReduceCombiner>(
         /*combine_threshold_in_bytes=*/30 * 1024 * 1024,
         /*combine_threshold_count=*/256);
     TF_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
   }
+  
   return Status::OK();
 }
 
@@ -322,6 +514,9 @@ Status GpuCompiler::PrepareHloModuleForIrEmitting(HloModule* hlo_module) {
   // assumed immutable at this point, and should not be reused for output
   // (b/27180329). Therefore, in that case, we set the output to be a copy of
   // the parameter.
+  XLA_SCOPED_LOGGING_TIMER(
+      "GpuCompiler::PrepareHloModuleForIrEmitting for module " +
+      hlo_module->name());
   HloPassPipeline pipeline("GPU-ir-emit-prepare");
   /* TODO(b/117531509): Use LayoutAssignment::InstructionCanChangeLayout after
    * fixing the ticket. */
@@ -424,16 +619,31 @@ StatusOr<std::unique_ptr<HloModule>> GpuCompiler::RunHloPasses(
     std::unique_ptr<HloModule> module, se::StreamExecutor* stream_exec,
     se::DeviceMemoryAllocator* device_allocator) {
   // We dump the post-optimization HLO in RunBackend so no need to dump it here.
-  XLA_SCOPED_LOGGING_TIMER("GpuCompiler::RunHloPasses");
+  XLA_SCOPED_LOGGING_TIMER("GpuCompiler::RunHloPasses for module " + module->name());
   tensorflow::profiler::TraceMe activity(
       [&] { return absl::StrCat("HLO Transforms:", module->name()); },
       tensorflow::profiler::TraceMeLevel::kInfo);
-  TF_RETURN_IF_ERROR(
-      OptimizeHloModule(module.get(), stream_exec, device_allocator));
+  std::unique_ptr<HloModule> optimized_module =
+      OptimizedHloModuleCacheSingleton::GetInstance()
+          ->MaybeLoadOptimizedModule(module.get());
 
-  TF_RETURN_IF_ERROR(PrepareHloModuleForIrEmitting(module.get()));
+  if (!optimized_module) {
+    uint64 raw_module_hash = module->Hash();
+    VLOG(1) << "No cache to optimize module " << module->name() << " hash "
+            << module->Hash();
+    TF_RETURN_IF_ERROR(
+        OptimizeHloModule(module.get(), stream_exec, device_allocator));
 
-  return std::move(module);
+    TF_RETURN_IF_ERROR(PrepareHloModuleForIrEmitting(module.get()));
+
+    VLOG(1) << "After running optimization module " << module->name()
+            << " hash " << module->Hash();
+
+    OptimizedHloModuleCacheSingleton::GetInstance()
+        ->FlushOptimizedModuleToMem(module.get(), raw_module_hash);
+    return std::move(module);
+  }
+  return std::move(optimized_module);
 }
 
 static Status CompileModuleToLlvmIrImpl(
@@ -594,9 +804,13 @@ StatusOr<std::unique_ptr<Executable>> GpuCompiler::RunBackend(
   GpuVersion gpu_version = GetGpuVersion(stream_exec);
 
   using BackendCompileResult = std::pair<std::string, std::vector<uint8>>;
-  TF_ASSIGN_OR_RETURN(BackendCompileResult backend_result,
-                      CompileTargetBinary(module.get(), llvm_module.get(),
-                                          gpu_version, stream_exec));
+  BackendCompileResult backend_result;
+  {
+    XLA_SCOPED_LOGGING_TIMER("GpuCompiler::RunBackend - CompileTargetBinary");
+    TF_ASSIGN_OR_RETURN(backend_result,
+                        CompileTargetBinary(module.get(), llvm_module.get(),
+                                            gpu_version, stream_exec));
+  }
 
   auto thunk_schedule = absl::make_unique<ThunkSchedule>(
       std::move(thunk_sequence), std::move(stream_assignment),

@@ -397,6 +397,11 @@ message HloModuleProto {
   DynamicParameterBindingProto dynamic_parameter_binding = 9;
 }
 
+// Serialization of optimized HloModule after passes in hlo optimization pass pipeline
+message OptimizedHloModuleCacheProto {
+  map<uint64, HloModuleProto> cache_map = 1;
+}
+
 // Serialization of LogicalBuffer.
 message LogicalBufferProto {
   // Location represents an instruction and its shape index, which uniquely
