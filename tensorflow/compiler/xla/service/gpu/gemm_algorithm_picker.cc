@@ -220,25 +220,25 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
 
   tensorflow::mutex_lock cache_lock(gemm_autotune_cache_mu);
   absl::optional<se::blas::AlgorithmType> result;
-  bool is_found_cache = GemmAutotuneCacheSingleton::GetInstance()->LookupCache(
+  bool is_found_cache = GemmAutotuneCacheSingleton::GetInstance().LookupCache(
       hashed_cache_key, result);
   uint64 gemm_autotune_requests =
-      GemmAutotuneCacheSingleton::GetInstance()->cache_hits +
-      GemmAutotuneCacheSingleton::GetInstance()->cache_misses + 1;
+      GemmAutotuneCacheSingleton::GetInstance().cache_hits +
+      GemmAutotuneCacheSingleton::GetInstance().cache_misses + 1;
 
   if (is_found_cache) {
-    GemmAutotuneCacheSingleton::GetInstance()->cache_hits++;
+    GemmAutotuneCacheSingleton::GetInstance().cache_hits++;
     VLOG(1) << "Autotuning cache hit, using algorithm: "
             << (result.has_value() ? absl::StrCat(result.value())
                                    : "<generic>");
     VLOG(1) << "Autotuning cache hits/(hits + misses): "
-            << GemmAutotuneCacheSingleton::GetInstance()->cache_hits << "/"
+            << GemmAutotuneCacheSingleton::GetInstance().cache_hits << "/"
             << gemm_autotune_requests;
     return result;
   }
-  GemmAutotuneCacheSingleton::GetInstance()->cache_misses++;
+  GemmAutotuneCacheSingleton::GetInstance().cache_misses++;
   VLOG(1) << "Autotuning cache misses/(hits + misses): "
-          << GemmAutotuneCacheSingleton::GetInstance()->cache_misses << "/"
+          << GemmAutotuneCacheSingleton::GetInstance().cache_misses << "/"
           << gemm_autotune_requests;
 
   // TODO(AmosChenYQ): Test the correctness of autotune result.
@@ -247,7 +247,7 @@ static StatusOr<absl::optional<se::blas::AlgorithmType>> DoGemmAutotune(
                                   reference_result_buffer, stream, allocator,
                                   comparator, crash_on_checking_failure));
 
-  CHECK(GemmAutotuneCacheSingleton::GetInstance()->AddToCache(
+  CHECK(GemmAutotuneCacheSingleton::GetInstance().AddToCache(
       hashed_cache_key,
       GemmAutotuneCache::CreateGemmAutotuneCacheValue(
           stream->parent(), instr, rhs, rhs, gemm_config, result)));
@@ -350,10 +350,12 @@ StatusOr<bool> GemmAlgorithmPicker::Run(HloModule* module) {
   return changed;
 }
 
-/* static */ GemmAutotuneCache* GemmAutotuneCacheSingleton::GetInstance() {
-  static std::shared_ptr<GemmAutotuneCache> gemm_autotune_cache_ptr =
-      std::make_shared<GemmAutotuneCache>();
-  return gemm_autotune_cache_ptr.get();
+/* static */ GemmAutotuneCache& GemmAutotuneCacheSingleton::GetInstance() {
+  // static std::shared_ptr<GemmAutotuneCache> gemm_autotune_cache_ptr =
+  //     std::make_shared<GemmAutotuneCache>();
+  // return gemm_autotune_cache_ptr.get();
+  static GemmAutotuneCache gemm_autotune_cache;
+  return gemm_autotune_cache;
 }
 
 /* static */ uint64 GemmAutotuneCache::GemmAutotuneCacheKeyHasher(

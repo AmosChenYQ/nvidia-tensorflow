@@ -34,11 +34,7 @@ namespace gpu {
 using tensorflow::AutotuneResult;
 
 class ConvAutotuneCache {
-  friend class ConvAutotuneCacheSingleton;
-
  public:
-  ConvAutotuneCache();
-  ~ConvAutotuneCache();
   static uint64 ConvAutotuneCacheKeyHasher(const se::StreamExecutor* stream_exec,
                                            const HloInstruction* instr);
   static ConvAutotuneCacheValue CreateConvAutotuneCacheValue(
@@ -50,6 +46,9 @@ class ConvAutotuneCache {
   uint64 cache_misses;
 
  private:
+  ConvAutotuneCache();
+  ~ConvAutotuneCache();
+  friend class ConvAutotuneCacheSingleton;
   std::string autotune_cache_filename_;
   bool in_use_;
   ConvAutotuneCacheProto conv_autotune_cache_proto_;
@@ -57,7 +56,7 @@ class ConvAutotuneCache {
 
 class ConvAutotuneCacheSingleton {
  public:
-  static ConvAutotuneCache* GetInstance();
+  static ConvAutotuneCache& GetInstance();
 };
 
 // Modifies CustomCalls to cudnn convolutions, choosing the best algorithm for

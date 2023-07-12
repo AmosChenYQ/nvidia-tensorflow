@@ -29,11 +29,7 @@ namespace xla {
 namespace gpu {
 
 class GemmAutotuneCache {
- friend class GemmAutotuneCacheSingleton;
-
  public:
-  GemmAutotuneCache();
-  ~GemmAutotuneCache();
   static uint64 GemmAutotuneCacheKeyHasher(
       const se::StreamExecutor* stream_exec, const HloInstruction* instr,
       const HloInstruction* lhs, const HloInstruction* rhs,
@@ -49,6 +45,9 @@ class GemmAutotuneCache {
   uint64 cache_misses;
 
  private:
+  GemmAutotuneCache();
+  ~GemmAutotuneCache();
+  friend class GemmAutotuneCacheSingleton;
   std::string autotune_cache_filename_;
   bool in_use_;
   GemmAutotuneCacheProto gemm_autotune_cache_proto_;
@@ -56,7 +55,7 @@ class GemmAutotuneCache {
 
 class GemmAutotuneCacheSingleton {
   public:
-   static GemmAutotuneCache* GetInstance();
+   static GemmAutotuneCache& GetInstance();
 };
 
 class GemmAlgorithmPicker : public HloModulePass {

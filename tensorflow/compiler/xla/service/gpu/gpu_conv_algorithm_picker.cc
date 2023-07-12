@@ -315,18 +315,18 @@ StatusOr<AutotuneResult> GpuConvAlgorithmPicker::PickBestAlgorithm(
       ConvAutotuneCache::ConvAutotuneCacheKeyHasher(stream_exec_, instr);
   bool is_found_cache = false;
   uint64 conv_autotune_requests = 
-      ConvAutotuneCacheSingleton::GetInstance()->cache_hits +
-          ConvAutotuneCacheSingleton::GetInstance()->cache_misses + 1;
+      ConvAutotuneCacheSingleton::GetInstance().cache_hits +
+          ConvAutotuneCacheSingleton::GetInstance().cache_misses + 1;
   ConvAutotuneCacheValue cache_value;
   {
     tensorflow::mutex_lock cache_lock(conv_autotune_cache_mu);
-    is_found_cache = ConvAutotuneCacheSingleton::GetInstance()->LookUpCache(
+    is_found_cache = ConvAutotuneCacheSingleton::GetInstance().LookUpCache(
         hashed_cache_key, cache_value);
   }
   if (is_found_cache) {
-    ConvAutotuneCacheSingleton::GetInstance()->cache_hits++;
+   ConvAutotuneCacheSingleton::GetInstance().cache_hits++;
     VLOG(1) << "Autotuning cache hits/(hits + misses): "
-            << ConvAutotuneCacheSingleton::GetInstance()->cache_hits << "/"
+            <<ConvAutotuneCacheSingleton::GetInstance().cache_hits << "/"
             << conv_autotune_requests;
     // return error status or conv autotune result
     if (cache_value.status_or_result_case() ==
@@ -338,9 +338,9 @@ StatusOr<AutotuneResult> GpuConvAlgorithmPicker::PickBestAlgorithm(
       return cache_value.conv_autotune_result();
     }
   }
-  ConvAutotuneCacheSingleton::GetInstance()->cache_misses++;
+ ConvAutotuneCacheSingleton::GetInstance().cache_misses++;
   VLOG(1) << "Autotuning cache misses/(hits + misses): "
-          << ConvAutotuneCacheSingleton::GetInstance()->cache_misses << "/"
+          <<ConvAutotuneCacheSingleton::GetInstance().cache_misses << "/"
           << conv_autotune_requests;
   // Check StreamExecutor on which platform it is. ROCm and Cuda implementation
   // have diverged. Specifically, we need to make sure redzone allocator related
@@ -359,7 +359,7 @@ StatusOr<AutotuneResult> GpuConvAlgorithmPicker::PickBestAlgorithm(
 
   {
     tensorflow::mutex_lock cache_lock(conv_autotune_cache_mu);
-    CHECK(ConvAutotuneCacheSingleton::GetInstance()->AddToCache(
+    CHECK(ConvAutotuneCacheSingleton::GetInstance().AddToCache(
         hashed_cache_key, ConvAutotuneCache::CreateConvAutotuneCacheValue(
                               result_or, stream_exec_, instr)));
   }
@@ -900,10 +900,12 @@ StatusOr<bool> GpuConvAlgorithmPicker::Run(HloModule* module) {
   return changed;
 }
 
-/* static */ ConvAutotuneCache* ConvAutotuneCacheSingleton::GetInstance() {
-  static std::shared_ptr<ConvAutotuneCache> conv_autotune_cache_ptr =
-      std::make_shared<ConvAutotuneCache>();
-  return conv_autotune_cache_ptr.get();
+/* static */ ConvAutotuneCache& ConvAutotuneCacheSingleton::GetInstance() {
+  // static std::shared_ptr<ConvAutotuneCache> conv_autotune_cache_ptr =
+  //     std::make_shared<ConvAutotuneCache>();
+  // return conv_autotune_cache_ptr.get();
+  static ConvAutotuneCache conv_autotune_cache;
+  return conv_autotune_cache;
 }
 
 /* static */ uint64 ConvAutotuneCache::ConvAutotuneCacheKeyHasher(
