@@ -122,171 +122,57 @@ limitations under the License.
 namespace xla {
 namespace gpu {
 
-// Use two-level cache. The underlying level cache saves hlo module proto
-// corresponding to different shapes of the same cluser(with the same name but
-// different module hash) to disk files in OptimizedHloModuleCacheProto. The upper
-// level cache saves all hlo module names and their corresponding
-// OptimizedHloModuleCacheProto which is cached in files to hash map in memory.
 static tensorflow::mutex cache_in_memory_mu(tensorflow::LINKER_INITIALIZED);
 
 OptimizedHloModuleCache::OptimizedHloModuleCache() {
   VLOG(1) << "OptimizedHloModuleCache constructor";
-  optimized_module_dir_ =
+  optimized_module_fname_ =
       GetDebugOptionsFromFlags().xla_gpu_optimized_hlo_module_dir();
-  if (has_dump_dir() &&
-      !tensorflow::Env::Default()->IsDirectory(optimized_module_dir_).ok()) {
-    optimized_module_dir_.clear();
+  in_use_ = !optimized_module_fname_.empty();
+  if(in_use_ && tensorflow::Env::Default()->FileExists(optimized_module_fname_).ok()) {
+    VLOG(1) << "Loading optimized hlo module cache from " << optimized_module_fname_;
+    std::string serialized_proto_str;
+    tensorflow::ReadFileToString(tensorflow::Env::Default(),
+                                 optimized_module_fname_,
+                                 &serialized_proto_str);
+    optimized_hlo_module_cache_proto_.ParseFromString(serialized_proto_str);
   }
 }
 
 OptimizedHloModuleCache::~OptimizedHloModuleCache() {
   VLOG(1) << "OptimizedHloModuleCache destructor";
-  VLOG(1) << "Optimized module dir is: " << optimized_module_dir_;
-  if (has_dump_dir() && tensorflow::Env::Default()->IsDirectory(optimized_module_dir_).ok()) {
-    VLOG(1) << "Will dump back memory cache back to files";
-    // tensorflow::mutex_lock lock(cache_in_memory_mu);
-    for (MapIterInMem it = cache_in_memory_.begin();
-         it != cache_in_memory_.end(); ++it) {
-      std::string optimized_module_filename =
-          absl::StrCat(optimized_module_dir_, "/", it->first, ".pb");
-      VLOG(1) << "Write module back from " << it->first << " back to "
-              << optimized_module_filename;
-      std::string serialized_proto_str;
-      it->second.SerializeToString(&serialized_proto_str);
-      tensorflow::WriteStringToFile(tensorflow::Env::Default(),
-                                    optimized_module_filename,
-                                    serialized_proto_str);
-    }
+  if (in_use_ && !optimized_module_fname_.empty()) {
+    VLOG(1) << "Commiting optimized hlo module cache to " << optimized_module_fname_;
+    std::string serialized_proto_str;
+    optimized_hlo_module_cache_proto_.SerializeToString(&serialized_proto_str);
+    tensorflow::WriteStringToFile(tensorflow::Env::Default(),
+                                  optimized_module_fname_,
+                                  serialized_proto_str);
   }
 }
 
-bool OptimizedHloModuleCache::TryLoadFromFile(const HloModule* const module) {
-  if (!has_dump_dir()) {
+bool OptimizedHloModuleCache::LookUpHloModuleCache(uint64 module_hash,
+                                              HloModuleProto* cache_value) {
+  if (optimized_hlo_module_cache_proto_.cache_map().count(module_hash) > 0) {
+    *cache_value = optimized_hlo_module_cache_proto_.cache_map().at(module_hash);
+    return true;
+  }
+  return false;
+}
+
+bool OptimizedHloModuleCache::AddToHloModuleCache(
+    uint64 module_hash, const HloModuleProto& cache_value) {
+  if (optimized_hlo_module_cache_proto_.cache_map().count(module_hash) > 0) {
     return false;
   }
-  std::string module_name = module->name();
-  std::string optimized_module_filename =
-      absl::StrCat(optimized_module_dir_, "/", module_name, ".pb");
-  if (!tensorflow::Env::Default()->FileExists(optimized_module_filename).ok()) {
-    VLOG(1) << "Can not find pb file for module " << module->name()
-            << " file is " << optimized_module_filename;
-    return false;
-  }
-  std::string serialized_proto_str;
-  OptimizedHloModuleCacheProto optimized_module_cache_proto;
-  if (!tensorflow::ReadFileToString(tensorflow::Env::Default(),
-                                    optimized_module_filename,
-                                    &serialized_proto_str)
-           .ok() ||
-      !optimized_module_cache_proto.ParseFromString(serialized_proto_str)) {
-    VLOG(1) << "Read or parse file error for module " << module->name()
-            << " file is " << optimized_module_filename;
-    return false;
-  }
-  {
-    // tensorflow::mutex_lock lock(cache_in_memory_mu);
-    bool insert_ok = cache_in_memory_.insert({module_name, optimized_module_cache_proto}).second;
-    
-  }
-  return true;
+  return optimized_hlo_module_cache_proto_.mutable_cache_map()
+      ->insert({module_hash, cache_value})
+      .second;
 }
 
-OptimizedHloModuleCache::LoadStatus OptimizedHloModuleCache::TryLoadFromMem(
-    const HloModule* const module,
-    std::unique_ptr<HloModule>* optimized_module) {
-  OptimizedHloModuleCache::MapIterInMem iter;
-  {
-    // tensorflow::mutex_lock lock(cache_in_memory_mu);
-    iter = cache_in_memory_.find(module->name());
-  }
-  *optimized_module = nullptr;
-  if (iter == cache_in_memory_.end()) {
-    VLOG(1) << "Try load from mem but proto not in mem for module name "
-            << module->name();
-    return LoadStatus::kProtoNotInMem;
-  } else if (!iter->second.cache_map().count(module->Hash())) {
-    VLOG(1) << "Proto found for module " << module->name()
-            << " but not found with hash " << module->Hash();
-    return LoadStatus::kNotFoundInMem;
-  }
-  StatusOr<std::unique_ptr<HloModule>> status_or = HloModule::CreateFromProto(
-      iter->second.cache_map().at(module->Hash()), module->config());
-  if (!status_or.ok()) {
-    VLOG(1) << "Create optimized hlo module from proto not ok for module "
-            << module->name();
-    return LoadStatus::kNotFoundInMem;
-  }
-  *optimized_module = std::move(status_or.ValueOrDie());
-  return LoadStatus::kFoundInMem;
-}
-
-std::unique_ptr<HloModule> OptimizedHloModuleCache::MaybeLoadOptimizedModule(
-    const HloModule* const module) {
-  XLA_SCOPED_LOGGING_TIMER(
-      "OptimizedHloModuleCache::MaybeLoadOptimizedModule for module " +
-      module->name());
-  std::unique_ptr<HloModule> optimized_module = nullptr;
-  LoadStatus status = TryLoadFromMem(module, &optimized_module);
-  if (status == LoadStatus::kProtoNotInMem && TryLoadFromFile(module)) {
-    VLOG(1) << "Try to load from file for module " << module->name();
-    LoadStatus retry_status = TryLoadFromMem(module, &optimized_module);
-    if (retry_status == LoadStatus::kProtoNotInMem) {
-      VLOG(1) << "After trying to load from file still not found in mem for "
-                 "module " << module->name();
-    }
-  }
-  if(optimized_module) {
-    VLOG(1) << "After loading from mem or file optimized module is "
-            << optimized_module->name();
-  }
-  return std::move(optimized_module);
-}
-
-bool OptimizedHloModuleCache::FlushOptimizedModuleToMem(
-    const HloModule* const optimized_module, uint64 raw_module_hash) {
-  bool flush_ok = false;
-  OptimizedHloModuleCache::MapIterInMem iter;
-  {
-    // tensorflow::mutex_lock lock(cache_in_memory_mu);
-    iter = cache_in_memory_.find(optimized_module->name());
-  }
-  if (iter == cache_in_memory_.end()) {
-    OptimizedHloModuleCacheProto new_module_cache_proto;
-    bool insert_proto_ok = new_module_cache_proto.mutable_cache_map()
-                               ->insert({raw_module_hash, optimized_module->ToProto()})
-                               .second;
-    if (insert_proto_ok) {
-      flush_ok =
-          cache_in_memory_.insert({optimized_module->name(), new_module_cache_proto})
-              .second;
-    }
-    VLOG(1) << "Flush proto to mem hash " << raw_module_hash << " module "
-            << optimized_module->name() << " hash " << optimized_module->Hash()
-            << " insert proto " << (insert_proto_ok ? " ok" : " not ok")
-            << "flush " << (flush_ok ? " ok" : " not ok");
-  } else {
-    flush_ok = iter->second.mutable_cache_map()
-                   ->insert({raw_module_hash, optimized_module->ToProto()})
-                   .second;
-    VLOG(1) << "Flush proto to mem hash " << raw_module_hash << " module "
-            << optimized_module->name() << " hash " << optimized_module->Hash()
-            << (flush_ok ? " ok" : " not ok");
-  }
-
-
-  for (auto&& mem_it : cache_in_memory_) {
-    VLOG(1) << optimized_module->name() << " " << mem_it.first;
-    for (auto&& proto_it : *mem_it.second.mutable_cache_map()) {
-      VLOG(1) << optimized_module->name() << " " << proto_it.first;
-    }
-  }
-  return flush_ok;
-}
-
-/* static */ OptimizedHloModuleCache* OptimizedHloModuleCacheSingleton::GetInstance() {
-  static std::shared_ptr<OptimizedHloModuleCache> optimized_hlo_module_cache_ptr =
-      std::make_shared<OptimizedHloModuleCache>();
-  return optimized_hlo_module_cache_ptr.get();
+/* static */ OptimizedHloModuleCache& OptimizedHloModuleCacheSingleton::GetInstance() {
+  static OptimizedHloModuleCache optimized_hlo_module_cache;
+  return optimized_hlo_module_cache;
 }
 
 GpuCompiler::GpuCompiler(se::Platform::Id platform_id,
@@ -619,31 +505,40 @@ StatusOr<std::unique_ptr<HloModule>> GpuCompiler::RunHloPasses(
     std::unique_ptr<HloModule> module, se::StreamExecutor* stream_exec,
     se::DeviceMemoryAllocator* device_allocator) {
   // We dump the post-optimization HLO in RunBackend so no need to dump it here.
-  XLA_SCOPED_LOGGING_TIMER("GpuCompiler::RunHloPasses for module " + module->name());
+  XLA_SCOPED_LOGGING_TIMER("GpuCompiler::RunHloPasses for module " +
+                           module->name());
   tensorflow::profiler::TraceMe activity(
       [&] { return absl::StrCat("HLO Transforms:", module->name()); },
       tensorflow::profiler::TraceMeLevel::kInfo);
-  std::unique_ptr<HloModule> optimized_module =
-      OptimizedHloModuleCacheSingleton::GetInstance()
-          ->MaybeLoadOptimizedModule(module.get());
+  std::unique_ptr<HloModuleProto> optimized_module_proto = nullptr;
+  uint64 unoptimized_module_hash = module->Hash();
+  bool is_found =
+      OptimizedHloModuleCacheSingleton::GetInstance().LookUpHloModuleCache(
+          unoptimized_module_hash, optimized_module_proto.get());
 
-  if (!optimized_module) {
-    uint64 raw_module_hash = module->Hash();
-    VLOG(1) << "No cache to optimize module " << module->name() << " hash "
-            << module->Hash();
-    TF_RETURN_IF_ERROR(
-        OptimizeHloModule(module.get(), stream_exec, device_allocator));
-
-    TF_RETURN_IF_ERROR(PrepareHloModuleForIrEmitting(module.get()));
-
-    VLOG(1) << "After running optimization module " << module->name()
-            << " hash " << module->Hash();
-
-    OptimizedHloModuleCacheSingleton::GetInstance()
-        ->FlushOptimizedModuleToMem(module.get(), raw_module_hash);
-    return std::move(module);
+  if (is_found && optimized_module_proto) {
+    VLOG(1) << "Find module in cache hash: " << unoptimized_module_hash;
+    StatusOr<std::unique_ptr<HloModule>> status_or = HloModule::CreateFromProto(
+      *optimized_module_proto, module->config());
+    if(status_or.ok()) {
+      VLOG(1) << "Create optimized hlo module for hash: " << unoptimized_module_hash;
+      return std::move(status_or.ValueOrDie());
+    }
   }
-  return std::move(optimized_module);
+
+  TF_RETURN_IF_ERROR(
+      OptimizeHloModule(module.get(), stream_exec, device_allocator));
+
+  TF_RETURN_IF_ERROR(PrepareHloModuleForIrEmitting(module.get()));
+
+  if (!is_found) {
+    bool insert_ok =
+        OptimizedHloModuleCacheSingleton::GetInstance().AddToHloModuleCache(
+            unoptimized_module_hash, module->ToProto());
+    VLOG(1) << "Insert module hash " << unoptimized_module_hash;
+  }
+
+  return std::move(module);
 }
 
 static Status CompileModuleToLlvmIrImpl(

@@ -40,71 +40,22 @@ namespace xla {
 namespace gpu {
 
 class OptimizedHloModuleCache {
-  friend class OptimizedHloModuleCacheSingleton;
-
  public:
-  using MapInMem =
-      absl::flat_hash_map<std::string, OptimizedHloModuleCacheProto>;
-  using MapIterInMem =
-      typename absl::flat_hash_map<std::string,
-                                   OptimizedHloModuleCacheProto>::iterator;
-
-  enum class LoadStatus {
-    kFoundInMem,
-    kNotFoundInMem,
-    kProtoNotInMem
-  };
-
-  // Responsiblle for update optimized_module_dir_.
-  OptimizedHloModuleCache();
-  // Responsible for writing the proto in the memory back to the corresponding
-  // file when it is destructed.
-  ~OptimizedHloModuleCache();
-  // TryLoadFromFile is to load all of protos with the same module name but with
-  // different shapes from file into memory. Return true iff the module's
-  // name-proto pair is loaded into memoty.
-  bool TryLoadFromFile(const HloModule* const module);
-  // TryLoadFromMem is to load module with the required shape from flat_hash_map
-  // in memory. Return KFoundInMem and fill optimized_module if proto collection
-  // of the same name is in memory and the required module is in this proto.
-  // Return kNotFoundInMem and left optimized_module to nullptr if proto
-  // collection of the same name is in memory but the required module isn't in
-  // this proto. Return KProtoNotInMem and left optimized_module to nullptr if
-  // proto collection of the same name isn't in memory and this means a
-  // TryLoadFromFile is needed in this case.
-  LoadStatus
-  TryLoadFromMem(const HloModule* const module,
-                 std::unique_ptr<HloModule>* optimized_module);
-  // MaybeLoadOptimizedModule will try to load optimized module proto from
-  // memory firstly, if there is no required shape module in memory, try to load
-  // optimized module proto from file to memory then try load required proto
-  // from memory again.
-  std::unique_ptr<HloModule> MaybeLoadOptimizedModule(
-      const HloModule* const module);
-  // FlushOptimizedModuleToMem will store the module optimized by pass
-  // into memory. If the name doesn't exist in memory cache, create an empty
-  // OptimizedHloModuleCacheProto and add module to it , otherwise update
-  // OptimizedHloModuleCacheProto already existing in cache in memory.
-  bool FlushOptimizedModuleToMem(const HloModule* const optimized_module,
-                                 uint64 raw_module_hash);
-
-  // Only when dir is valid it will be saved to optimized_module_dir_.
-  bool has_dump_dir() const { return !optimized_module_dir_.empty(); }
+  bool LookUpHloModuleCache(uint64 module_hash, HloModuleProto* cache_value);
+  bool AddToHloModuleCache(uint64 module_hash, const HloModuleProto& cache_value);
 
  private:
-  // cache_in_memory_ contains a map in memory whose key is module name and
-  // value is all protos with the same name but with different shapes relying on
-  // module hash to distinguish different shapes. OptimizedHloModuleCacheProto
-  // contains a map whose key is module hash representing the shape and value is
-  // HloModuleProto.
-  absl::flat_hash_map<std::string, OptimizedHloModuleCacheProto>
-      cache_in_memory_;
-  std::string optimized_module_dir_;
+  OptimizedHloModuleCache();
+  ~OptimizedHloModuleCache();
+  friend class OptimizedHloModuleCacheSingleton;
+  OptimizedHloModuleCacheProto optimized_hlo_module_cache_proto_;
+  std::string optimized_module_fname_;
+  bool in_use_;
 };
 
 class OptimizedHloModuleCacheSingleton {
  public:
-  static OptimizedHloModuleCache* GetInstance();
+  static OptimizedHloModuleCache& GetInstance();
 };
 
 // The GPU compiler generates efficient GPU executables.
