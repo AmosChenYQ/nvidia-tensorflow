@@ -407,6 +407,12 @@ std::vector<const KernelDef*> XlaOpRegistry::DeviceKernels(
     }
   }
 
+  std::string constant_inputs_info = "";
+  for (const string& input : *compile_time_constant_inputs) {
+    constant_inputs_info += input;
+  }
+  VLOG(3) << "NodeDef name: " << node_def.name() << " NodeDef op: " << node_def.op()
+          << " compile time constant inputs: " << constant_inputs_info;
   for (const string& input : *compile_time_constant_inputs) {
     if (op_def) {
       NameRangeMap input_name_ranges;
