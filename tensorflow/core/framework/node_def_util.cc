@@ -703,8 +703,9 @@ Status NameRangesHelper(const AttrSlice& attrs,
   int start = 0;
   int num;
   for (const auto& arg : args) {
-    TF_RETURN_IF_ERROR(ComputeArgRange(attrs, arg, op_def, &num));
+    TF_RETURN_IF_ERROR(ComputeArgRange(attrs, arg, op_def, &num)); 
     (*result)[arg.name()] = std::make_pair(start, start + num);
+    VLOG(3) << "Arg name: " << arg.name() << " start: " << start << " end: " << num;
     start += num;
   }
   return Status::OK();
@@ -715,10 +716,12 @@ Status NameRangesHelper(const AttrSlice& attrs,
 Status NameRangesForNode(const AttrSlice& attrs, const OpDef& op_def,
                          NameRangeMap* inputs, NameRangeMap* outputs) {
   if (inputs != nullptr) {
+    VLOG(3) << "Input op name and range for op name: " << op_def.name();
     TF_RETURN_IF_ERROR(
         NameRangesHelper(attrs, op_def.input_arg(), op_def, inputs));
   }
   if (outputs != nullptr) {
+    VLOG(3) << "Output op name and range for op name: " << op_def.name();
     return NameRangesHelper(attrs, op_def.output_arg(), op_def, outputs);
   }
   return Status::OK();

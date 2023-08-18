@@ -100,12 +100,22 @@ Status BuildControlFlowInfo(const Graph* g, std::vector<ControlFlowInfo>* info,
   std::deque<const Node*> ready;
   ready.push_back(src_node);
   while (!ready.empty()) {
+    // TODO(AmosChenYQ): Figure out what is control flow info's usage here by logging
+    // std::vector<std::string> ready_list;
+    // for (const Node* node_in_ready : ready) {
+    //   ready_list.push_back(node_in_ready->name());
+    // }
+    // VLOG(1) << "BFS Queue now contains:" << absl::StrJoin(ready_list, ", ");
     const Node* curr_node = ready.front();
     ready.pop_front();
     const ControlFlowInfo& curr_info = (*info)[curr_node->id()];
     const Node* frame = curr_info.frame;
     const Node* parent = curr_info.parent_frame;
     frame_name = curr_info.frame_name;
+    // TODO(AmosChenYQ): Figure out what is control flow info's usage here by logging
+    // VLOG(1) << "BFS Queue's current node name is: " << curr_node->name();
+    // VLOG(1) << "BFS Queue's current node parent frame is: " << parent->name();
+    // VLOG(1) << "BFS Queue's current node frame name is: " << frame_name;
 
     if (IsExit(curr_node)) {
       // Exit to the parent frame.

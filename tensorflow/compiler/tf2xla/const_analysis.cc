@@ -185,6 +185,7 @@ Status BackwardsConstAnalysis(const Graph& g,
 
     // If this is a metadata-only op, don't propagate the const requirement.
     if (XlaOpRegistry::IsMetadataOp(node->type_string())) {
+      VLOG(1) << node->name() << " is meta data op, ignore it for const analysis";
       return;
     }
 
