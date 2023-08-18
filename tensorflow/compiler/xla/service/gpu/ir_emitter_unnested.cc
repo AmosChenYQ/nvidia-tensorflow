@@ -1573,6 +1573,8 @@ std::unique_ptr<KernelThunk> IrEmitterUnnested::BuildKernelThunk(
         llvm::ConstantPointerNull::get(b_.getInt8PtrTy()));
   }
 
+  VLOG(1) << "Build kernel thunk for llvm function name: " << std::string(kernel->getName());
+
   return absl::make_unique<KernelThunk>(
       non_constant_buffers, std::string(kernel->getName()),
       implements_whole_instruction ? inst : nullptr, unroll_factor);

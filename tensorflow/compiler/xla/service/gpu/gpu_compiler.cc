@@ -129,8 +129,10 @@ OptimizedHloModuleCache::OptimizedHloModuleCache() {
   optimized_module_fname_ =
       GetDebugOptionsFromFlags().xla_gpu_optimized_hlo_module_dir();
   in_use_ = !optimized_module_fname_.empty();
-  if(in_use_ && tensorflow::Env::Default()->FileExists(optimized_module_fname_).ok()) {
-    VLOG(1) << "Loading optimized hlo module cache from " << optimized_module_fname_;
+  if (in_use_ &&
+      tensorflow::Env::Default()->FileExists(optimized_module_fname_).ok()) {
+    VLOG(1) << "Loading optimized hlo module cache from "
+            << optimized_module_fname_;
     std::string serialized_proto_str;
     tensorflow::ReadFileToString(tensorflow::Env::Default(),
                                  optimized_module_fname_,
@@ -142,7 +144,8 @@ OptimizedHloModuleCache::OptimizedHloModuleCache() {
 OptimizedHloModuleCache::~OptimizedHloModuleCache() {
   VLOG(1) << "OptimizedHloModuleCache destructor";
   if (in_use_ && !optimized_module_fname_.empty()) {
-    VLOG(1) << "Commiting optimized hlo module cache to " << optimized_module_fname_;
+    VLOG(1) << "Commiting optimized hlo module cache to "
+            << optimized_module_fname_;
     std::string serialized_proto_str;
     optimized_hlo_module_cache_proto_.SerializeToString(&serialized_proto_str);
     tensorflow::WriteStringToFile(tensorflow::Env::Default(),
@@ -151,10 +154,11 @@ OptimizedHloModuleCache::~OptimizedHloModuleCache() {
   }
 }
 
-bool OptimizedHloModuleCache::LookUpHloModuleCache(uint64 module_hash,
-                                              HloModuleProto* cache_value) {
+bool OptimizedHloModuleCache::LookUpHloModuleCache(
+    uint64 module_hash, HloModuleProto* cache_value) {
   if (optimized_hlo_module_cache_proto_.cache_map().count(module_hash) > 0) {
-    *cache_value = optimized_hlo_module_cache_proto_.cache_map().at(module_hash);
+    *cache_value =
+        optimized_hlo_module_cache_proto_.cache_map().at(module_hash);
     return true;
   }
   return false;
@@ -170,7 +174,8 @@ bool OptimizedHloModuleCache::AddToHloModuleCache(
       .second;
 }
 
-/* static */ OptimizedHloModuleCache& OptimizedHloModuleCacheSingleton::GetInstance() {
+/* static */ OptimizedHloModuleCache&
+OptimizedHloModuleCacheSingleton::GetInstance() {
   static OptimizedHloModuleCache optimized_hlo_module_cache;
   return optimized_hlo_module_cache;
 }
@@ -245,8 +250,9 @@ Status GpuCompiler::OptimizeHloModule(
       // If cudnn batchnorms are enabled, rewrite batchnorm HLOs to cudnn calls
       // where possible.  Not every batchnorm op can be implemented as a call to
       // cudnn, so decompose any remaining batchnorm ops into a soup of HLOs.
-      if (hlo_module->config().debug_options().xla_gpu_use_cudnn_batchnorm_level() >
-          0) {
+      if (hlo_module->config()
+              .debug_options()
+              .xla_gpu_use_cudnn_batchnorm_level() > 0) {
         // Since BatchNorm inference is essentially pointwise operations, it is
         // always advantageous to use kernel fusion rather than cudnn.
         pass.AddPass<BatchNormExpander>(
@@ -255,7 +261,9 @@ Status GpuCompiler::OptimizeHloModule(
             /*rewrite_grad_op=*/false);
         pass.AddPass<CudnnBatchNormRewriter>(
             stream_exec, device_allocator,
-            hlo_module->config().debug_options().xla_gpu_use_cudnn_batchnorm_level());
+            hlo_module->config()
+                .debug_options()
+                .xla_gpu_use_cudnn_batchnorm_level());
       }
       pass.AddPass<BatchNormExpander>(
           /*rewrite_training_op=*/true,
@@ -308,7 +316,7 @@ Status GpuCompiler::OptimizeHloModule(
     // modifications.
     pipeline.AddPass<WhileLoopTripCountAnnotator>();
     TF_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
-  } // End of optimization pass scope
+  }  // End of optimization pass scope
 
   // Run target-specific HLO optimization passes for convolution
   // canonicalization.
@@ -388,7 +396,7 @@ Status GpuCompiler::OptimizeHloModule(
         /*combine_threshold_count=*/256);
     TF_RETURN_IF_ERROR(pipeline.Run(hlo_module).status());
   }
-  
+
   return Status::OK();
 }
 
@@ -518,10 +526,11 @@ StatusOr<std::unique_ptr<HloModule>> GpuCompiler::RunHloPasses(
 
   if (is_found && optimized_module_proto) {
     VLOG(1) << "Find module in cache hash: " << unoptimized_module_hash;
-    StatusOr<std::unique_ptr<HloModule>> status_or = HloModule::CreateFromProto(
-      *optimized_module_proto, module->config());
-    if(status_or.ok()) {
-      VLOG(1) << "Create optimized hlo module for hash: " << unoptimized_module_hash;
+    StatusOr<std::unique_ptr<HloModule>> status_or =
+        HloModule::CreateFromProto(*optimized_module_proto, module->config());
+    if (status_or.ok()) {
+      VLOG(1) << "Create optimized hlo module for hash: "
+              << unoptimized_module_hash;
       return std::move(status_or.ValueOrDie());
     }
   }
@@ -598,6 +607,8 @@ static Status CompileModuleToLlvmIrImpl(
 
   {
     XLA_SCOPED_LOGGING_TIMER("GpuCompiler::RunBackend - IR emission");
+    VLOG(1) << "Preparing ir emission for HloModule: " << hlo_module->name()
+            << " with entry computation name: " << entry_computation->name();
     TF_RETURN_IF_ERROR(entry_computation->Accept(&ir_emitter));
   }
   *thunk_sequence = ir_emitter.ConsumeThunkSequence();
@@ -662,6 +673,10 @@ StatusOr<std::unique_ptr<Executable>> GpuCompiler::RunBackend(
   std::unique_ptr<BufferAssignment> buffer_assignment;
   std::unique_ptr<ThunkSequence> thunk_sequence;
 
+  VLOG(1) << "CompileModuleToLlvmIrImpl for HloModule: " << module->name()
+          << " with target triple: " << target_triple_
+          << " data layout: " << data_layout_
+          << " pointer_size: " << pointer_size_;
   TF_RETURN_IF_ERROR(CompileModuleToLlvmIrImpl(
       module.get(), &llvm_context, target_triple_, data_layout_,
       stream_exec->platform()->Name(), gpu_device_info, cuda_compute_capability,
@@ -669,6 +684,7 @@ StatusOr<std::unique_ptr<Executable>> GpuCompiler::RunBackend(
       &hlo_schedule, &buffer_assignment, &thunk_sequence));
 
   if (user_pre_optimization_hook_) {
+    VLOG(1) << "User pre optimization hook is defined";
     user_pre_optimization_hook_(*llvm_module);
   }
   string ir_module_string_before_opt;
