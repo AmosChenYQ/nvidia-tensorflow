@@ -616,6 +616,10 @@ StatusOr<bool> MarkForCompilationPassImpl::Initialize() {
     return false;
   }
 
+  // TODO(AmosChenYQ): Read the code about how to create cycles_graph
+  VLOG(3) << "After creating cycle detection graph, cycles graph in graphviz format:";
+  VLOG(3) << "\n" << cycles_graph_.DebugString();
+
   if (!debug_options_.ignore_deadness_checks) {
     XLA_SCOPED_LOGGING_TIMER_LEVEL("DeadnessAnalysis", 1);
     TF_RETURN_IF_ERROR(DeadnessAnalysis::Run(*graph_, &deadness_analysis_));
@@ -625,6 +629,11 @@ StatusOr<bool> MarkForCompilationPassImpl::Initialize() {
   // representative names the node in the 'cycles' graph that represents the
   // cluster.
   TF_RETURN_IF_ERROR(BuildInitialClusterSet());
+
+  // TODO(AmosChenYQ): Read the code about how to initialize cluster set
+  VLOG(3) << "After building initial cluster set, cycles graph in graphviz format:";
+  VLOG(3) << "\n" << cycles_graph_.DebugString();
+
   return true;
 }
 
@@ -1136,7 +1145,7 @@ absl::flat_hash_set<string> GetOrCreateWhitelist() {
   if (!whitelist.empty()) {
     std::vector<string> vwhitelist(whitelist.begin(), whitelist.end());
     absl::c_sort(vwhitelist);
-    VLOG(3) << "XLA clustering will only consider the following TF operations: "
+    VLOG(1) << "XLA clustering will only consider the following TF operations: "
             << absl::StrJoin(vwhitelist, " ");
   }
   return whitelist;
@@ -1299,6 +1308,12 @@ Status MarkForCompilationPassImpl::FindCompilationCandidates() {
   TF_RETURN_IF_ERROR(BackwardsConstAnalysis(
       *graph_, /*compile_time_const_arg_indices=*/nullptr,
       &compile_time_const_nodes, lib_runtime));
+  for (Node* node : graph_->op_nodes()) {
+    VLOG(3) << "Node name: " << node->name() << " Op name: " 
+            << node->def().op() << "is compile time const: "
+            << (compile_time_const_nodes[node->id()] ? "yes" : "no");
+  }
+  
   // Iterate over nodes in sorted order so that compiler fuel is deterministic.
   // We can't simply pass op_nodes().begin() and op_nodes().end to the
   // std::vector constructor because they're not proper iterators, with
@@ -1376,6 +1391,8 @@ Status MarkForCompilationPassImpl::FindCompilationCandidates() {
 
     if (!RecursiveCompilabilityChecker{&op_filter, &jit_device_type}
              .IsCompilableNode(*node, lib_runtime)) {
+      VLOG(1) << "Rejecting TF operation " << node->def().op()
+              << " as it can not pass recursive compilablity checker.";
       continue;
     }
 
@@ -1386,7 +1403,7 @@ Status MarkForCompilationPassImpl::FindCompilationCandidates() {
     }
 
     if (exclude_possible_dynamic_nodes && IsNodeDynamic(node)) {
-      VLOG(3) << "Found possible dynamic node. " << node->def().op() << " "
+      VLOG(1) << "Found possible dynamic node. " << node->def().op() << " "
               << node->name()
               << " might be costly to cluster due to possible dynamic nature ";
       continue;
@@ -1436,8 +1453,10 @@ Status MarkForCompilationPassImpl::FindCompilationCandidates() {
             GetResourceOpInfoForOp(node->type_string());
         bool is_tensor_array_or_stack_op =
             op_info && op_info->resource_kind() != XlaResourceKind::kVariable;
+        VLOG(1) << node->name() << " is tensor array or stack op "
+                << (is_tensor_array_or_stack_op ? "yes" : "no");
         if (!is_tensor_array_or_stack_op) {
-          VLOG(2) << "Isolating " << node->name()
+          VLOG(1) << "Isolating " << node->name()
                   << ": must-be-constant stateful op";
           continue;
         }
@@ -1479,6 +1498,10 @@ Status MarkForCompilationPassImpl::FindCompilationCandidates() {
 
   VLOG(2) << "compilation_candidates_.size() = "
           << compilation_candidates_.size();
+  for (auto candidate : compilation_candidates_) {
+    VLOG(2) << "Node name: " << candidate->name()
+            << " Node op: " << candidate->def().op();
+  }
   return Status::OK();
 }
 

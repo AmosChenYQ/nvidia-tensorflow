@@ -324,15 +324,18 @@ xla::StatusOr<jit::DeviceId> InferDeviceForCluster(
 
   jit::DeviceSet device_set;
 
+  VLOG(3) << "Infer node's device in function: " << function_name;
   for (const NodeDef& ndef : func_def->node_def()) {
-    VLOG(3) << ndef.DebugString();
+    VLOG(3) << "Node name: " << ndef.name() << " op: " << ndef.op();
     if (!ndef.device().empty()) {
       TF_ASSIGN_OR_RETURN(jit::DeviceId device_id,
                           device_info_cache->GetIdFor(ndef.device()));
       device_set.Insert(device_id);
+      VLOG(3) << "Assigned to: " << device_info_cache->GetNameFor(device_id);
     }
   }
 
+  VLOG(3) << "Infer cluster node's device: ";
   if (!n->assigned_device_name().empty()) {
     // TODO(sanjoy): We need this because EncapsulateSubgraphsPass drops device
     // assignment when constant folding.  We should fix EncapsulateSubgraphsPass
@@ -382,6 +385,8 @@ Status ReplaceNodeWithXlaCompileAndXlaRun(
   XlaClusterInfo cluster_info;
   TF_RETURN_IF_ERROR(GetXlaClusterInfo(n, &cluster_info));
 
+  VLOG(3) << "Infer device information for cluster function name: "
+          << cluster_info.function.name() << ", node name: " << n->name();
   TF_ASSIGN_OR_RETURN(
       jit::DeviceId device,
       InferDeviceForCluster(device_info_cache, n, cluster_info.function.name(),

@@ -495,6 +495,9 @@ Status Encapsulator::Subgraph::RecordArg(
   int dst_slot = edge->dst_input();
   args_by_dst_[InputTensor(dst_node, dst_slot)] = arg_index;
   graph_->AddEdge(args_[arg_index], 0, dst_image, dst_slot);
+  VLOG(3) << "Record arg node for original graph: " << src_node->name() << ":" << src_slot
+          << " in subgraph arg node: " << args_[arg_index]->name() << ":0"
+          << " in subgraph input node: " << dst_image->name() << ":" << dst_slot;
   return Status::OK();
 }
 
@@ -533,6 +536,9 @@ Status Encapsulator::Subgraph::RecordResult(
     if (!s.ok()) return s;
 
     graph_->AddEdge(src_image, src_slot, ret, 0);
+    VLOG(3) << "Added retval node: " << ret->name()
+            << " for node in subgraph: " << src_image->name()
+            << " node in original graph: " << src_node->name();
   }
   return Status::OK();
 }
@@ -743,6 +749,7 @@ Status Encapsulator::CopySubgraphEdges(
       if (edge->IsControlEdge()) {
         TF_RETURN_IF_ERROR(src_subgraph.RecordControlResult(edge, node_images));
       } else {
+        VLOG(3) << "Record output result for subgraph: " << src_func_id;
         TF_RETURN_IF_ERROR(src_subgraph.RecordResult(edge, node_images));
       }
     }
@@ -766,6 +773,7 @@ Status Encapsulator::CopySubgraphEdges(
       // Ignore control edges entering the subgraph. We will lift them onto
       // the enclosing call operators in BuildOutputGraph().
       if (!edge->IsControlEdge()) {
+        VLOG(3) << "Record input args for subgraph: " << dst_func_id;
         TF_RETURN_IF_ERROR(
             dst_subgraph.RecordArg(edge, node_images, src_arg_pairs));
       }
@@ -786,8 +794,19 @@ Status Encapsulator::SplitIntoSubgraphs(FunctionLibraryDefinition* library) {
   // be filled in below in AddArgs.
   std::vector<std::pair<const Node*, Node*>> src_arg_pairs;
 
+  VLOG(3) << "Copy subgraph nodes:";
   TF_RETURN_IF_ERROR(CopySubgraphNodes(&node_images));
+  for (auto it : node_images) {
+    VLOG(3) << "From input graph node: " << it.first->name() << " to "
+            << "subgraph node: " << it.second->name();
+  }
+
+  VLOG(3) << "Copy subgraph edges:";
   TF_RETURN_IF_ERROR(CopySubgraphEdges(node_images, &src_arg_pairs));
+  for (auto it : src_arg_pairs) {
+    VLOG(3) << "From original graph node: " << it.first->name()
+            << " to arg node in subgraph: " << it.second->name();
+  }
 
   MarkGuaranteedConstants(*graph_in_, src_arg_pairs);
 
@@ -1114,7 +1133,10 @@ Status EncapsulateSubgraphsInFunctions(
     std::unique_ptr<Graph>* graph_out, FunctionLibraryDefinition* library) {
   Encapsulator encapsulator(std::move(group_attribute),
                             &graph_in);
+
+  VLOG(3) << "There is " << library->num_functions() << " functions before splitting into subgraphs";
   TF_RETURN_IF_ERROR(encapsulator.SplitIntoSubgraphs(library));
+  VLOG(3) << "There is " << library->num_functions() << " functions after splitting into subgraphs";
 
   TF_RETURN_IF_ERROR(encapsulator.BuildFunctionDefs(
       rewrite_subgraph_fn, reuse_existing_functions, library));
