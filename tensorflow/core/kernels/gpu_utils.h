@@ -236,7 +236,7 @@ class AutoTuneExecutionPlanMap {
   }
   void Insert(const Parameters& params,
               std::vector<cudnn_frontend::ExecutionPlan>& plans) {
-    if (plans.size() != 1 and plans.size() != 2) {
+    if (plans.size() != 1 && plans.size() != 2) {
       return;
     }
     mutex_lock lock(mu_);
@@ -293,7 +293,9 @@ class AutoTuneExecutionPlanMap {
       }
     }
     if (new_score >= min_score_threshold_) {
-      VLOG(1) << GetActionSummary("accepts", params, iter->second);
+      if (iter != params_config_map_.end()) {
+        VLOG(1) << GetActionSummary("accepts", params, iter->second);
+      }
     } else if (autotune_global_count_ >= max_autotune_global_count_) {
       // The autotuning exceeds the max iteration threshold and we accept the
       // the winner if it exists in the map, otherwise we accept the current
