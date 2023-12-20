@@ -502,6 +502,28 @@ REGISTER_OP("MatchingFilesDataset")
       return shape_inference::ScalarShape(c);
     });
 
+REGISTER_OP("ExperimentalFunctionBufferingResource")
+    .Input("string_arg: string")
+    .Input("target_device: string")
+    .Output("resource: resource")
+    .Attr("shared_name: string")
+    .Attr("container: string")
+    .Attr("f: func")
+    .Attr("buffer_size: int")
+    .Attr("output_types: list(type)")
+    .SetShapeFn(shape_inference::UnknownShape);
+
+REGISTER_OP("ExperimentalFunctionBufferingResourceGetNext")
+    .Input("function_buffer_resource: resource")
+    .Attr("output_types: list(type)")
+    .Output("output: output_types")
+    .SetShapeFn(shape_inference::UnknownShape);
+
+REGISTER_OP("ExperimentalFunctionBufferingResourceReset")
+    .Input("function_buffer_resource: resource")
+    .SetShapeFn(shape_inference::UnknownShape);
+
+
 REGISTER_OP("ExperimentalMatchingFilesDataset")
     .Input("patterns: string")
     .Output("handle: variant")

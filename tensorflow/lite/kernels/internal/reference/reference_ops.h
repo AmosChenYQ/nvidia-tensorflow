@@ -2231,11 +2231,11 @@ inline TfLiteStatus GatherNd(const RuntimeShape& params_shape,
   }
 
   for (int i = 0; i < n_slices; ++i) {
-    int64 from_pos = 0;
+    int64_t from_pos = 0;
     for (int j = 0; j < indices_nd; ++j) {
       from_pos += indices_data[i * indices_nd + j] * dims_to_count[j];
     }
-    if (from_pos < 0 || from_pos + res.slice_size > params_shape.FlatSize()) {
+    if (from_pos < 0 || from_pos + slice_size > params_shape.FlatSize()) {
       return kTfLiteError;
     }
     std::memcpy(output_data + i * slice_size, params_data + from_pos,

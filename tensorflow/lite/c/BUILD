@@ -9,6 +9,7 @@ cc_library(
     hdrs = [
         "builtin_op_data.h",
         "c_api_internal.h",
+        "c_api_types.h"
     ],
     visibility = [
         "//learning/brain/mobile/kernel_test:__subpackages__",

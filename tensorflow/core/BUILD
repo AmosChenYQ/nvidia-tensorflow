@@ -1186,6 +1186,8 @@ tf_gen_op_libs(
     deps = [
         ":lib",
         ":protos_all_cc",
+        "//tensorflow/stream_executor/lib",
+        "//tensorflow/stream_executor/platform"
     ],
 )
 
@@ -2893,6 +2895,7 @@ tf_cuda_library(
             "framework/tracking_allocator.cc",
             "example/example_parser_configuration.*",
             "example/feature_util.cc",
+            "util/example_proto_fast_parsing_test.cc",
             "util/reporter.cc",
             "framework/fake_input.*",
             "framework/op_gen_lib.*",
@@ -2942,6 +2945,8 @@ tf_cuda_library(
         "//tensorflow/core/kernels:bounds_check",
         "//tensorflow/core/profiler:nvtx_utils",
         "//tensorflow/core/profiler/lib:traceme",
+        "//tensorflow/stream_executor/lib",
+        "//tensorflow/stream_executor/platform",
         "//third_party/eigen3",
     ] + if_static(
         extra_deps = ["@com_google_protobuf//:protobuf"],

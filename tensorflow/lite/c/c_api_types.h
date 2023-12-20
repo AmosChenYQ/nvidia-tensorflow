@@ -85,7 +85,7 @@ typedef struct {
 
 // Given the size (number of elements) in a TfLiteIntArray, calculate its size
 // in bytes.
-size_t TfLiteIntArrayGetSizeInBytes(int size);
+int TfLiteIntArrayGetSizeInBytes(int size);
 
 // Create a array of a given `size` (uninitialized entries).
 // This returns a pointer, that you must free using TfLiteIntArrayFree().
@@ -128,47 +128,6 @@ TfLiteFloatArray* TfLiteFloatArrayCreate(int size);
 
 // Free memory of array `a`.
 void TfLiteFloatArrayFree(TfLiteFloatArray* a);
-
-
-// Since we must not depend on any libraries, define a minimal subset of
-// error macros while avoiding names that have pre-conceived meanings like
-// assert and check.
-
-// Try to make all reporting calls through TF_LITE_KERNEL_LOG rather than
-// calling the context->ReportError function directly, so that message strings
-// can be stripped out if the binary size needs to be severely optimized.
-#ifndef TF_LITE_STRIP_ERROR_STRINGS
-#define TF_LITE_KERNEL_LOG(context, ...)            \
-  do {                                              \
-    (context)->ReportError((context), __VA_ARGS__); \
-  } while (false)
-
-#define TF_LITE_MAYBE_KERNEL_LOG(context, ...)        \
-  do {                                                \
-    if ((context) != nullptr) {                       \
-      (context)->ReportError((context), __VA_ARGS__); \
-    }                                                 \
-  } while (false)
-#else  // TF_LITE_STRIP_ERROR_STRINGS
-#define ARGS_UNUSED(...) (void)sizeof(#__VA_ARGS__)
-#define TF_LITE_KERNEL_LOG(context, ...) ARGS_UNUSED(__VA_ARGS__)
-#define TF_LITE_MAYBE_KERNEL_LOG(context, ...) ARGS_UNUSED(__VA_ARGS__)
-#endif  // TF_LITE_STRIP_ERROR_STRINGS
-
-#ifdef __has_builtin
-#define TFLITE_HAS_BUILTIN(x) __has_builtin(x)
-#else
-#define TFLITE_HAS_BUILTIN(x) 0
-#endif
-
-#if (!defined(__NVCC__)) && (TFLITE_HAS_BUILTIN(__builtin_expect) || \
-                             (defined(__GNUC__) && __GNUC__ >= 3))
-#define TFLITE_EXPECT_FALSE(cond) __builtin_expect(cond, false)
-#define TFLITE_EXPECT_TRUE(cond) __builtin_expect(!!(cond), true)
-#else
-#define TFLITE_EXPECT_FALSE(cond) (cond)
-#define TFLITE_EXPECT_TRUE(cond) (cond)
-#endif
 
 // Since we must not depend on any libraries, define a minimal subset of
 // error macros while avoiding names that have pre-conceived meanings like
