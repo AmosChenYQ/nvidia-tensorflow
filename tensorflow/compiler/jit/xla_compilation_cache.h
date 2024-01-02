@@ -238,6 +238,7 @@ class XlaCompilationCache : public ResourceBase {
 
   // The number of times a lazy compilation must be requested for a specific
   // signature before we attempt to compile it.
+  // TODO(AmosChenYQ): Change this back to 3
   static constexpr int64 kDefaultCompilationThreshold = 0;
 
   TF_DISALLOW_COPY_AND_ASSIGN(XlaCompilationCache);

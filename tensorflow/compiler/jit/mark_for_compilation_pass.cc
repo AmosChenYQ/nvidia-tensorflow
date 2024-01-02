@@ -628,11 +628,8 @@ StatusOr<bool> MarkForCompilationPassImpl::Initialize() {
   // Each compilation candidate belongs to a cluster. The cluster's
   // representative names the node in the 'cycles' graph that represents the
   // cluster.
-  TF_RETURN_IF_ERROR(BuildInitialClusterSet());
-
   // TODO(AmosChenYQ): Read the code about how to initialize cluster set
-  VLOG(3) << "After building initial cluster set, cycles graph in graphviz format:";
-  VLOG(3) << "\n" << cycles_graph_.DebugString();
+  TF_RETURN_IF_ERROR(BuildInitialClusterSet());
 
   return true;
 }
@@ -1310,7 +1307,7 @@ Status MarkForCompilationPassImpl::FindCompilationCandidates() {
       &compile_time_const_nodes, lib_runtime));
   for (Node* node : graph_->op_nodes()) {
     VLOG(3) << "Node name: " << node->name() << " Op name: " 
-            << node->def().op() << "is compile time const: "
+            << node->def().op() << " is compile time const: "
             << (compile_time_const_nodes[node->id()] ? "yes" : "no");
   }
   
