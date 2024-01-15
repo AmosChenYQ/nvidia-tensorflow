@@ -58,6 +58,9 @@ port::StatusOr<StreamExecutor*> ExecutorCache::GetOrCreate(
     // If construction failed, leave the cache Entry around, but with a null
     // executor.
     return result.status();
+  } else {
+    VLOG(1) << "Successfully build executor from platform: " 
+            << result.ValueOrDie()->platform()->Name();
   }
   entry->configurations.emplace_back(config, std::move(result.ValueOrDie()));
   return entry->configurations.back().second.get();
