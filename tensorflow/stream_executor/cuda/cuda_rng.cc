@@ -248,6 +248,9 @@ void initialize_curand() {
               delete rng;
               return nullptr;
             }
+
+            VLOG(1) << "Successfully initialize curand";
+
             return rng;
           });
 

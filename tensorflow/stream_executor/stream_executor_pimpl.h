@@ -81,6 +81,9 @@ class StreamExecutor {
   port::Status Init();
   port::Status Init(DeviceOptions device_options);
 
+  // Init device platform's plugins like cudnn/cublas/cufft/curng
+  port::Status InitPlugin();
+
   // Returns the platform that this StreamExecutor is acting upon.
   ABSL_DEPRECATED("Use platform() instead.")
   PlatformKind platform_kind() const { return platform_kind_; }

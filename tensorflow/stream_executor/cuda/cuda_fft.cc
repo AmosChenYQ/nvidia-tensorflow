@@ -545,6 +545,8 @@ void initialize_cufft() {
               return nullptr;
             }
 
+            VLOG(1) << "Successfully initialize cufft";
+
             return new gpu::CUDAFft(cuda_executor);
           });
   if (!status.ok()) {

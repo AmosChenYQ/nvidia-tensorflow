@@ -3953,6 +3953,7 @@ port::Status CudnnSupport::DoConvolve(
     return port::Status::OK();
   };
 
+  auto call_cudnn_api_start = std::chrono::steady_clock::now();
   switch (kind) {
     case dnn::ConvolutionKind::FORWARD: {
       SE_RETURN_IF_ERROR(get_fwd_bugs());
@@ -4007,6 +4008,12 @@ port::Status CudnnSupport::DoConvolve(
       return port::InternalError(
           absl::StrCat("Unexpected convolution kind ", static_cast<int>(kind)));
   }
+  auto call_cudnn_api_end = std::chrono::steady_clock::now();
+  VLOG(1) << "Call cudnn convolution api took "
+          << std::chrono::duration<double, std::milli>(call_cudnn_api_end -
+                                                       call_cudnn_api_start)
+                 .count()
+          << "ms";
 
   if (is_profiling) {
     if (!timer->Stop(AsGpuStream(stream))) {
@@ -4873,8 +4880,15 @@ bool CudnnSupport::GetConvolveAlgorithms(
     bool with_winograd_nonfused, int cc_major, int cc_minor,
     std::vector<dnn::AlgorithmDesc>* out_algorithms) {
 #if CUDNN_MAJOR >= 8 && (CUDNN_MINOR > 0 || CUDNN_PATCHLEVEL >= 4)
+  auto cudnn_version_check_start = std::chrono::steady_clock::now();
   cudnnOpsInferVersionCheck();
   cudnnCnnInferVersionCheck();
+  auto cudnn_version_check_end = std::chrono::steady_clock::now();
+  VLOG(1) << "Cudnn version check took "
+          << std::chrono::duration<double, std::milli>(cudnn_version_check_end -
+                                                       cudnn_version_check_start)
+                 .count()
+          << "ms";
 #endif
   bool tensor_op_math_available = TensorOpMathAvailable(cc_major);
   out_algorithms->clear();
@@ -6455,6 +6469,9 @@ void initialize_cudnn() {
               delete dnn;
               return nullptr;
             }
+
+            VLOG(1) << "Successfully initialize cudnn";
+            
             return dnn;
           });
 

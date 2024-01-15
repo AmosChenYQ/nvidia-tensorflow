@@ -178,7 +178,7 @@ ScopedActivateContext::ScopedActivateContext(GpuContext* cuda_context) {
     return;
   }
 
-  VLOG(3) << "ScopedActivateContext switching context from " << tls->id
+  VLOG(1) << "ScopedActivateContext switching context from " << tls->id
           << " to " << cuda_context->id();
 
   to_restore_ = (tls->depth == 1 ? nullptr : tls->context);

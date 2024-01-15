@@ -182,6 +182,15 @@ CudaPlatform::GetUncachedExecutor(const StreamExecutorConfig& config) {
             config.ordinal, init_status.ToString()));
   }
 
+  auto init_plugin_start = std::chrono::steady_clock::now();
+  auto init_plugin_status = executor->InitPlugin();
+  auto init_plugin_end = std::chrono::steady_clock::now();
+  VLOG(1) << "Initialization plugins of stream executor takes "
+          << std::chrono::duration<double, std::milli>(init_plugin_end -
+                                                       init_plugin_start)
+                 .count()
+          << "ms";
+
   return std::move(executor);
 }
 

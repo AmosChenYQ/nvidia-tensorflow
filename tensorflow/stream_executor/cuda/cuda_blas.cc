@@ -3202,6 +3202,9 @@ void initialize_cublas() {
               delete blas;
               return nullptr;
             }
+
+            VLOG(1) << "Successfully initialize cublas";
+            
             return blas;
           });
 

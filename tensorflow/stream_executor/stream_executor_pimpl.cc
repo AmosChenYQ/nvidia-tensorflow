@@ -188,6 +188,38 @@ port::Status StreamExecutor::Init(DeviceOptions device_options) {
 
 port::Status StreamExecutor::Init() { return Init(DeviceOptions::Default()); }
 
+port::Status StreamExecutor::InitPlugin() {
+  string platform_name = absl::AsciiStrToLower(platform_->Name());
+  // Only handle CUDA platform
+  if (platform_name == "cuda") {
+    absl::MutexLock lock(&mu_);
+    VLOG(1) << "Enter into support plugin init";
+    if (implementation_ != nullptr) {
+      if (!dnn_ && implementation_->SupportsDnn()) {
+        dnn_ = std::unique_ptr<dnn::DnnSupport>(implementation_->CreateDnn());
+        VLOG(1) << "Create dnn support for stream executor";
+      }
+      if (!blas_ && implementation_->SupportsBlas()) {
+        blas_ = std::unique_ptr<blas::BlasSupport>(implementation_->CreateBlas());
+        VLOG(1) << "Create blas support for stream executor";
+      }
+      if (!fft_ && implementation_->SupportsFft()) {
+        fft_ = std::unique_ptr<fft::FftSupport>(implementation_->CreateFft());
+        VLOG(1) << "Create fft support for stream executor";
+      }
+      if (!rng_ && implementation_->SupportsRng()) {
+        rng_ = std::unique_ptr<rng::RngSupport>(implementation_->CreateRng());
+        VLOG(1) << "Create rng support for stream executor";
+      }
+    }
+    if (!dnn_ || !blas_ || !fft_ || !rng_) {
+      return port::Status(port::error::INVALID_ARGUMENT, 
+                          "Cuda plugin initialization error");
+    }
+  }
+  return port::Status::OK();
+}
+
 port::Status StreamExecutor::GetKernel(const MultiKernelLoaderSpec &spec,
                                        KernelBase *kernel) {
   return implementation_->GetKernel(spec, kernel);
