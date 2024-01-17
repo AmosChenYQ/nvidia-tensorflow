@@ -19,6 +19,8 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/matmul_op.h"
 
+#include <chrono>
+
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -246,9 +248,8 @@ bool GetCublasAutotuneComputationType(const DataType& dtype,
 struct MatmulAutoTuneGroup {
   static string name() { return "Matmul"; }
 };
-typedef AutoTuneSingleton<MatmulAutoTuneGroup, MatmulParameters,
-                          se::blas::AlgorithmConfig>
-    AutoTuneMatmul;
+// typedef AutoTuneSingleton<MatmulAutoTuneGroup, MatmulParameters, se::blas::AlgorithmConfig> AutoTuneMatmul;
+typedef MatmulAutoTuneSingleton<MatmulAutoTuneGroup> AutoTuneMatmul;
 
 template <typename T>
 struct LaunchMatMul<GPUDevice, T, true /* USE_CUBLAS */> {
@@ -256,6 +257,7 @@ struct LaunchMatMul<GPUDevice, T, true /* USE_CUBLAS */> {
       OpKernelContext* ctx, const Tensor& a, const Tensor& b,
       const Eigen::array<Eigen::IndexPair<Eigen::DenseIndex>, 1>& dim_pair,
       std::vector<int64>* algorithms, bool use_autotune, Tensor* out) {
+    VLOG(1) << "Launch MatMul";
     using se::blas::AlgorithmConfig;
     using se::blas::ComputationType;
     using se::blas::kDefaultAlgorithm;
@@ -300,6 +302,9 @@ struct LaunchMatMul<GPUDevice, T, true /* USE_CUBLAS */> {
       // TODO(yangzihao): Unify this code with conv autotuning.
       if (!AutoTuneMatmul::GetInstance()->Find(matmul_parameters,
                                                &algorithm_config)) {
+        VLOG(1) << "Cudnn autotune is used in matmul ops and execution plan is not found";
+        VLOG(1) << "Start autotune for matmul ops";
+        auto matmul_ops_autotune_start = std::chrono::steady_clock::now();
         ProfileResult profile_result;
         for (auto profile_algorithm : (*algorithms)) {
           // Cublas does
@@ -352,6 +357,9 @@ struct LaunchMatMul<GPUDevice, T, true /* USE_CUBLAS */> {
             }
           }
         }
+        auto matmul_ops_autotune_end = std::chrono::steady_clock::now();
+        VLOG(1) << "Autotune for matmul ops took "
+                << std::chrono::duration<double, std::milli>(matmul_ops_autotune_end - matmul_ops_autotune_start).count() << "ms";
       }
       // We make sure that each matmul parameter set only gets one pass of
       // autotune. If the best result is found, assign it to algorithm_type

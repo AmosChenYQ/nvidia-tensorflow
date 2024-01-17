@@ -25,6 +25,7 @@ limitations under the License.
 #include "tensorflow/core/kernels/gpu_utils.h"
 #include "tensorflow/core/lib/gtl/inlined_vector.h"
 #include "tensorflow/core/lib/hash/hash.h"
+#include "tensorflow/core/protobuf/conv_autotuning.pb.h"
 
 namespace tensorflow {
 
@@ -109,18 +110,28 @@ class ConvParameters {
         dtype_(dtype),
         device_id_(device_id),
         group_count_(group_count) {
-    hash_code_ = batch;
-    hash_code_ = Hash64Combine(hash_code_, in_depths);
-    for (int64 val : in) hash_code_ = Hash64Combine(hash_code_, val);
-    hash_code_ = Hash64Combine(hash_code_, data_format);
-    hash_code_ = Hash64Combine(hash_code_, out_depths);
-    for (int64 val : filter) hash_code_ = Hash64Combine(hash_code_, val);
-    for (int64 val : dilation) hash_code_ = Hash64Combine(hash_code_, val);
-    for (int64 val : stride) hash_code_ = Hash64Combine(hash_code_, val);
-    for (int64 val : padding) hash_code_ = Hash64Combine(hash_code_, val);
-    hash_code_ = Hash64Combine(hash_code_, dtype);
-    hash_code_ = Hash64Combine(hash_code_, device_id);
-    hash_code_ = Hash64Combine(hash_code_, group_count);
+    UpdateHash();
+  }
+
+  ConvParameters(const ConvParamsProto& proto) {
+    batch_ = proto.batch();
+    in_depths_ = proto.in_depths();
+    out_depths_ = proto.out_depths();
+    in_ = CheckSpatialArraySize(
+        SpatialArray(proto.in().begin(), proto.in().end()));
+    data_format_ = static_cast<TensorFormat>(proto.data_format());
+    filter_ = CheckSpatialArraySize(
+        SpatialArray(proto.filter().begin(), proto.filter().end()));
+    dilation_ = CheckSpatialArraySize(
+        SpatialArray(proto.dilation().begin(), proto.dilation().end()));
+    stride_ = CheckSpatialArraySize(
+        SpatialArray(proto.stride().begin(), proto.stride().end()));
+    padding_ = CheckSpatialArraySize(
+        SpatialArray(proto.padding().begin(), proto.padding().end()));
+    dtype_ = proto.dtype();
+    device_id_ = proto.device_id();
+    group_count_ = proto.group_count();
+    UpdateHash();
   }
 
   bool operator==(const ConvParameters& other) const {
@@ -131,6 +142,33 @@ class ConvParameters {
     return !(*this == other);
   }
   uint64 hash() const { return hash_code_; }
+
+  ConvParamsProto ToProto() const {
+    ConvParamsProto proto;
+    proto.set_batch(batch_);
+    proto.set_in_depths(in_depths_);
+    proto.set_out_depths(out_depths_);
+    for (const auto each_in : in_) {
+      proto.mutable_in()->Add(each_in);
+    }
+    proto.set_data_format(data_format_);
+    for (const auto each_filter : filter_) {
+      proto.mutable_filter()->Add(each_filter);
+    }
+    for (const auto each_dilation : dilation_) {
+      proto.mutable_dilation()->Add(each_dilation);
+    }
+    for (const auto each_stride : stride_) {
+      proto.mutable_stride()->Add(each_stride);
+    }
+    for (const auto each_padding : padding_) {
+      proto.mutable_padding()->Add(each_padding);
+    }
+    proto.set_dtype(dtype_);
+    proto.set_device_id(device_id_);
+    proto.set_group_count(group_count_);
+    return proto;
+  }
 
   string ToString() const {
     // clang-format off
@@ -144,7 +182,7 @@ class ConvParameters {
         "(", str_util::Join(stride_, ", "), "), ",
         "(", str_util::Join(padding_, ", "), "), ",
         dtype_, ", ",
-        device_id_,
+        device_id_, ", ",
         group_count_);
     // clang-format on
   }
@@ -198,6 +236,21 @@ class ConvParameters {
     } else {
       return true;
     }
+  }
+
+  void UpdateHash() {
+    hash_code_ = batch_;
+    hash_code_ = Hash64Combine(hash_code_, in_depths_);
+    for (int64 val : in_) hash_code_ = Hash64Combine(hash_code_, val);
+    hash_code_ = Hash64Combine(hash_code_, data_format_);
+    hash_code_ = Hash64Combine(hash_code_, out_depths_);
+    for (int64 val : filter_) hash_code_ = Hash64Combine(hash_code_, val);
+    for (int64 val : dilation_) hash_code_ = Hash64Combine(hash_code_, val);
+    for (int64 val : stride_) hash_code_ = Hash64Combine(hash_code_, val);
+    for (int64 val : padding_) hash_code_ = Hash64Combine(hash_code_, val);
+    hash_code_ = Hash64Combine(hash_code_, dtype_);
+    hash_code_ = Hash64Combine(hash_code_, device_id_);
+    hash_code_ = Hash64Combine(hash_code_, group_count_);
   }
 
   int64 batch_;

@@ -33,8 +33,8 @@ limitations under the License.
 #include "third_party/gpus/cudnn/cudnn.h"
 #if CUDNN_VERSION >= 8100
 #include "third_party/cudnn_frontend/include/cudnn_frontend.h"
-#endif // CUDNN_VERSION >= 8100
-#endif // GOOGLE_CUDA
+#endif  // CUDNN_VERSION >= 8100
+#endif  // GOOGLE_CUDA
 
 namespace stream_executor {
 namespace cuda {
@@ -66,7 +66,7 @@ se::DeviceMemoryBase WrapRedzoneBestEffort(
 // Check the passed allocator for redzone violations.
 // If violations have occurred, mark the corresponding autotune result
 // as a failure.
-template<typename T>
+template <typename T>
 void CheckRedzones(const se::cuda::RedzoneAllocator& rz_allocator,
                    T* autotune_result);
 
@@ -156,7 +156,6 @@ class AutoTuneMap {
     autotune_global_count_++;
   }
 
- private:
   AutoTuneMap(const string& name) : name_(name) {
     min_score_threshold_ = 1;
     int min_warmup_iterations = 10;
@@ -210,8 +209,8 @@ class AutoTuneMap {
 };
 
 #if CUDNN_VERSION >= 8100
-using se::dnn::ExecutionPlanDesc;
 using se::dnn::ExecutionPlanConfig;
+using se::dnn::ExecutionPlanDesc;
 template <typename Parameters>
 class AutoTuneExecutionPlanMap {
  public:
@@ -224,13 +223,13 @@ class AutoTuneExecutionPlanMap {
       return false;
     }
     auto& plan = iter->second.plan;
-    plan_config->set_plan(ExecutionPlanDesc(plan.getTag(), plan.get_raw_desc()));
+    plan_config->set_plan(
+        ExecutionPlanDesc(plan.getTag(), plan.get_raw_desc()));
     plan_config->set_scratch_size(plan.getWorkspaceSize());
     if (iter->second.plan_no_scratch.has_value()) {
       auto& plan_no_scratch = iter->second.plan_no_scratch;
-      plan_config->set_plan_no_scratch(
-          ExecutionPlanDesc(plan_no_scratch->getTag(),
-                            plan_no_scratch->get_raw_desc()));
+      plan_config->set_plan_no_scratch(ExecutionPlanDesc(
+          plan_no_scratch->getTag(), plan_no_scratch->get_raw_desc()));
     }
     return true;
   }
@@ -258,17 +257,18 @@ class AutoTuneExecutionPlanMap {
       if (plans.size() == 1) {
         ExecutionPlanConfig old_plan_config(
             old_plan, iter->second.plan.getWorkspaceSize());
-        ExecutionPlanConfig new_plan_config(
-            new_plan, plans[0].getWorkspaceSize());
+        ExecutionPlanConfig new_plan_config(new_plan,
+                                            plans[0].getWorkspaceSize());
         is_diff = new_plan_config != old_plan_config;
       } else if (iter->second.plan_no_scratch.has_value()) {
         ExecutionPlanDesc old_plan_no_scratch(
             iter->second.plan_no_scratch->getTag(),
             iter->second.plan_no_scratch->get_raw_desc());
-        ExecutionPlanDesc new_plan_no_scratch(
-            plans[1].getTag(), plans[1].get_raw_desc());
-        ExecutionPlanConfig old_plan_config(old_plan,
-            iter->second.plan.getWorkspaceSize(), old_plan_no_scratch);
+        ExecutionPlanDesc new_plan_no_scratch(plans[1].getTag(),
+                                              plans[1].get_raw_desc());
+        ExecutionPlanConfig old_plan_config(
+            old_plan, iter->second.plan.getWorkspaceSize(),
+            old_plan_no_scratch);
         ExecutionPlanConfig new_plan_config(
             new_plan, plans[1].getWorkspaceSize(), new_plan_no_scratch);
         is_diff = new_plan_config != old_plan_config;
@@ -326,10 +326,11 @@ class AutoTuneExecutionPlanMap {
   void UpdateMap(const Parameters& params, int score, int count,
                  std::vector<cudnn_frontend::ExecutionPlan>& plans) {
     if (plans.size() == 1) {
-      params_config_map_.insert(std::make_pair(params,
-          ValueType{std::move(plans[0]), {}, score, count}));
+      params_config_map_.insert(std::make_pair(
+          params, ValueType{std::move(plans[0]), {}, score, count}));
     } else {
-      params_config_map_.insert(std::make_pair(params,
+      params_config_map_.insert(std::make_pair(
+          params,
           ValueType{std::move(plans[0]), std::move(plans[1]), score, count}));
     }
   }
@@ -442,9 +443,10 @@ void LogConvAutotuneResults(se::dnn::ConvolutionKind kind,
                             se::StreamExecutor* stream_exec,
                             absl::Span<const AutotuneResult> results);
 
-void LogConvAutotuneResults(se::dnn::ConvolutionKind kind,
-    se::dnn::DataType element_type, se::DeviceMemoryBase input_buffer,
-    se::DeviceMemoryBase filter_buffer, se::DeviceMemoryBase output_buffer,
+void LogConvAutotuneResults(
+    se::dnn::ConvolutionKind kind, se::dnn::DataType element_type,
+    se::DeviceMemoryBase input_buffer, se::DeviceMemoryBase filter_buffer,
+    se::DeviceMemoryBase output_buffer,
     const se::dnn::BatchDescriptor& input_desc,
     const se::dnn::FilterDescriptor& filter_desc,
     const se::dnn::BatchDescriptor& output_desc,
@@ -483,8 +485,8 @@ Status BestCudnnConvAlgorithm(absl::Span<const AutotuneResult> results,
                               se::dnn::AlgorithmConfig* algo);
 
 Status BestCudnnConvExecutionPlan(
-    absl::Span<const AutotuneExecutionPlanResult> results,
-    int* idx_plan, int* idx_plan_no_scratch);
+    absl::Span<const AutotuneExecutionPlanResult> results, int* idx_plan,
+    int* idx_plan_no_scratch);
 
 }  // namespace tensorflow
 

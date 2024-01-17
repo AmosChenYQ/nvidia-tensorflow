@@ -3869,6 +3869,7 @@ tf_kernel_library(
         ":fused_eigen_output_kernels",
         ":ops_util",
         ":gpu_utils",
+        "//tensorflow/core:matmul_autotuning_proto_cc_impl",
     ] + select({
         ":xsmm": ["@libxsmm_archive//:xsmm_avx"],
         "//conditions:default": [],

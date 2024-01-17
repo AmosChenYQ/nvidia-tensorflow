@@ -795,6 +795,9 @@ class AlgorithmDesc {
     proto_.set_math_type(use_tensor_ops ? AlgorithmProto::TENSOR_OP_MATH
                                         : AlgorithmProto::DEFAULT_MATH);
   }
+  AlgorithmDesc(const AlgorithmProto& proto) {
+    proto_ = proto;
+  }
   bool tensor_ops_enabled() const {
     return proto_.math_type() == AlgorithmProto::TENSOR_OP_MATH;
   }
@@ -916,6 +919,23 @@ class AlgorithmConfig {
       : algorithm_(algorithm), scratch_size_(scratch_size) {}
   AlgorithmConfig(AlgorithmDesc algorithm, AlgorithmDesc algorithm_no_scratch)
       : algorithm_(algorithm), algorithm_no_scratch_(algorithm_no_scratch) {}
+  AlgorithmConfig(const AlgorithmConfigProto& conv_algo_cfg) {
+    algorithm_.reset();
+    algorithm_no_scratch_.reset();
+    scratch_size_.reset();
+    if (conv_algo_cfg.has_algorithm()) {
+      algorithm_ = AlgorithmDesc(conv_algo_cfg.algorithm());
+      scratch_size_ = conv_algo_cfg.scratch_size();
+    }
+    if (conv_algo_cfg.has_algorithm_no_scratch()) {
+      algorithm_no_scratch_ =
+          AlgorithmDesc(conv_algo_cfg.algorithm_no_scratch());
+    }
+    if (conv_algo_cfg.optional_scratch_size_case() ==
+        AlgorithmConfigProto::OptionalScratchSizeCase::kScratchSize) {
+      scratch_size_ = conv_algo_cfg.scratch_size();
+    }
+  }
   absl::optional<AlgorithmDesc> algorithm() const { return algorithm_; }
   void set_algorithm(AlgorithmDesc val) { algorithm_ = val; }
   absl::optional<AlgorithmDesc> algorithm_no_scratch() const {
@@ -935,6 +955,21 @@ class AlgorithmConfig {
     return !(*this == other);
   }
   string ToString() const;
+
+  AlgorithmConfigProto ToProto() const {
+    AlgorithmConfigProto conv_algo_cfg;
+    if (algorithm_.has_value()) {
+      *(conv_algo_cfg.mutable_algorithm()) = algorithm_.value().ToProto();
+    }
+    if (algorithm_no_scratch_.has_value()) {
+      *(conv_algo_cfg.mutable_algorithm_no_scratch()) =
+          algorithm_no_scratch_.value().ToProto();
+    }
+    if (scratch_size_.has_value()) {
+      conv_algo_cfg.set_scratch_size(scratch_size_.value());
+    }
+    return conv_algo_cfg;
+  }
 
  private:
   absl::optional<AlgorithmDesc> algorithm_;

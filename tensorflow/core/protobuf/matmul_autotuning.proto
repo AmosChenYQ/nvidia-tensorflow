@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package tensorflow;
+
+import "tensorflow/core/framework/types.proto";
+
+message MatmulParamsProto {
+  bool transa = 1;
+  bool transb = 2;
+  uint64 m = 3;
+  uint64 n = 4;
+  uint64 k = 5;
+  DataType dtype = 6;
+  int32 device_id = 7;
+}
+
+message MatmulAutoTuneList {
+  repeated MatmulParamsProto matmul_params = 1;
+  repeated int64 algorithm_type = 2;
+  repeated int32 score = 3;
+  repeated int32 count = 4;
+}

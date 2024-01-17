@@ -603,13 +603,6 @@ int64 GetDnnWorkspaceLimit(const string& envvar_in_mb,
 struct ConvAutoTuneGroup {
   static string name() { return "Conv"; }
 };
-#if GOOGLE_CUDA && CUDNN_VERSION >= 8100
-typedef AutoTuneExecutionPlanSingleton<ConvAutoTuneGroup, ConvParameters>
-    AutoTuneConvExecutionPlan;
-#endif // GOOGLE_CUDA && CUDNN_VERSION >= 8100
-typedef AutoTuneSingleton<ConvAutoTuneGroup, ConvParameters,
-                          se::dnn::AlgorithmConfig>
-    AutoTuneConv;
 
 template <typename T>
 void LaunchConv2DOp<GPUDevice, T>::operator()(
@@ -626,6 +619,16 @@ void LaunchConv2DOp<GPUDevice, T>::operator()(
   using se::dnn::AlgorithmConfig;
   using se::dnn::AlgorithmDesc;
   using se::dnn::ProfileResult;
+
+  #if GOOGLE_CUDA && CUDNN_VERSION >= 8100
+    typedef AutoTuneExecutionPlanSingleton<ConvAutoTuneGroup, ConvParameters>
+        AutoTuneConvExecutionPlan;
+  #endif  // GOOGLE_CUDA && CUDNN_VERSION >= 8100
+  // Have to use ConvAutoTuneSingleton class to use partial specialization of
+  // templates to get around the problem of unique properties of template
+  // parameters.
+  typedef ConvAutoTuneSingleton<ConvAutoTuneGroup> AutoTuneConv;
+
   auto* stream = ctx->op_device_context()->stream();
   OP_REQUIRES(ctx, stream, errors::Internal("No GPU stream available."));
 
@@ -962,9 +965,13 @@ void LaunchConv2DOp<GPUDevice, T>::operator()(
   std::vector<cudnn_frontend::ExecutionPlan> selected_exec_plans;
   AlgorithmConfig algorithm_config;
   if (CudnnUseFrontend()) {
+    VLOG(1) << "Cudnn frontend is used in conv ops";
     if (cudnn_use_autotune &&
         !AutoTuneConvExecutionPlan::GetInstance()->Find(
             conv_parameters, &exec_plan_config)) {
+      VLOG(1) << "Cudnn autotune is used in conv ops and execution plan is not found";
+      VLOG(1) << "Start autotune for conv ops";
+      auto conv_ops_autotune_start = std::chrono::steady_clock::now();
       std::vector<cudnn_frontend::ExecutionPlan> exec_plans;
       OP_REQUIRES(ctx,
                   stream->parent()->GetConvolveExecutionPlans(
@@ -1058,11 +1065,21 @@ void LaunchConv2DOp<GPUDevice, T>::operator()(
       }
       AutoTuneConvExecutionPlan::GetInstance()->Insert(
           conv_parameters, selected_exec_plans);
+      auto conv_ops_autotune_end = std::chrono::steady_clock::now();
+      VLOG(1) << "Autotune for conv ops use cudnn frontend took "
+              << std::chrono::duration<double, std::milli>(
+                     conv_ops_autotune_end - conv_ops_autotune_start)
+                     .count()
+              << "ms";
     }
   } else {
+    VLOG(1) << "Cudnn frontend is not used in conv ops";
     if (cudnn_use_autotune &&
         !AutoTuneConv::GetInstance()->Find(
             conv_parameters, &algorithm_config)) {
+      VLOG(1) << "Cudnn autotune is used in conv ops and algorithm config is not found";
+      VLOG(1) << "Start autotune for conv ops";
+      auto conv_ops_autotune_start = std::chrono::steady_clock::now();
       std::vector<AlgorithmDesc> algorithms;
       OP_REQUIRES(
           ctx,
@@ -1074,6 +1091,12 @@ void LaunchConv2DOp<GPUDevice, T>::operator()(
                           "probably because cuDNN failed to initialize, so try "
                           "looking to see if a warning log message was printed "
                           "above."));
+      auto conv_get_conv_algos_end = std::chrono::steady_clock::now();
+      VLOG(1) << "Get convolution algorithms took "
+              << std::chrono::duration<double, std::milli>(
+                     conv_get_conv_algos_end - conv_ops_autotune_start)
+                     .count()
+              << "ms";
       
       se::TfAllocatorAdapter tf_allocator_adapter(
           ctx->device()->GetAllocator({}), stream);
@@ -1127,6 +1150,12 @@ void LaunchConv2DOp<GPUDevice, T>::operator()(
           output_desc, conv_desc, stream->parent(), results);
       OP_REQUIRES_OK(ctx, BestCudnnConvAlgorithm(results, &algorithm_config));
       AutoTuneConv::GetInstance()->Insert(conv_parameters, algorithm_config);
+      auto conv_ops_autotune_end = std::chrono::steady_clock::now();
+      VLOG(1) << "Autotune for conv ops without cudnn frontend took "
+              << std::chrono::duration<double, std::milli>(
+                     conv_ops_autotune_end - conv_ops_autotune_start)
+                     .count()
+              << "ms";
     }
   }
 #else
@@ -1235,10 +1264,12 @@ void LaunchConv2DOp<GPUDevice, T>::operator()(
                 exec_plan_config, nullptr)
             .ok();
   } else {
-    VLOG(4) << "Convolution Algorithm: "
+    VLOG(1) << "Convolution Algorithm: "
             << algorithm_config.algorithm()->algo_id();
-    VLOG(4) << "tensor_ops_enabled: "
+    VLOG(1) << "tensor_ops_enabled: "
             << algorithm_config.algorithm()->tensor_ops_enabled();
+
+    auto cudnn_launch_start = std::chrono::steady_clock::now();
 
     cudnn_launch_status =
         stream
@@ -1247,11 +1278,18 @@ void LaunchConv2DOp<GPUDevice, T>::operator()(
                                         &output_ptr, &scratch_allocator,
                                         algorithm_config, nullptr)
             .ok();
+
+    auto cudnn_launch_end = std::chrono::steady_clock::now();
+    VLOG(1) << "Conv ops using cudnn took "
+            << std::chrono::duration<double, std::milli>(
+                     cudnn_launch_end - cudnn_launch_start)
+                     .count()
+            << "ms";
   }
 #else
-  VLOG(4) << "Convolution Algorithm: "
+  VLOG(1) << "Convolution Algorithm: "
           << algorithm_config.algorithm()->algo_id();
-  VLOG(4) << "tensor_ops_enabled: "
+  VLOG(1) << "tensor_ops_enabled: "
           << algorithm_config.algorithm()->tensor_ops_enabled();
 
   cudnn_launch_status =
@@ -1270,11 +1308,18 @@ void LaunchConv2DOp<GPUDevice, T>::operator()(
   }
 
   if (data_format == FORMAT_NHWC && compute_data_format == FORMAT_NCHW) {
-    VLOG(4) << "Convert the output tensor back from NCHW to NHWC.";
+    VLOG(1) << "Convert the output tensor back from NCHW to NHWC.";
+    auto data_format_convert_start = std::chrono::steady_clock::now();
     functor::NCHWToNHWC<GPUDevice, T, 4>()(
         ctx->eigen_device<GPUDevice>(),
         const_cast<const Tensor&>(transformed_output).tensor<T, 4>(),
         output->tensor<T, 4>());
+    auto data_format_convert_end = std::chrono::steady_clock::now();
+    VLOG(1) << "Data format conversion took "
+            << std::chrono::duration<double, std::milli>(
+                     data_format_convert_end - data_format_convert_start)
+                     .count()
+            << "ms";
   }
 }
 

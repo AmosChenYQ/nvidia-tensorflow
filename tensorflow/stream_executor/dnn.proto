@@ -117,3 +117,11 @@ message ConvolutionDescriptorProto {
   // Tensorflow node name, same as in NodeDef, for debugging purposes.
   string name = 7;
 }
+
+message AlgorithmConfigProto {
+  AlgorithmProto algorithm = 1;
+  AlgorithmProto algorithm_no_scratch = 2;
+  oneof optional_scratch_size {
+    int32 scratch_size = 3;
+  }
+}

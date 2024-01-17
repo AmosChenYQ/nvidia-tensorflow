@@ -20,6 +20,7 @@ limitations under the License.
 #include "tensorflow/core/framework/resource_mgr.h"
 #include "tensorflow/core/platform/mem.h"
 #include "tensorflow/core/util/tensor_format.h"
+#include "tensorflow/core/util/use_cudnn.h"
 
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 #include "tensorflow/core/kernels/conv_ops_gpu.h"
@@ -114,6 +115,84 @@ Status InitConv2DParameters(const OpKernelConstruction* context,
 Status ComputeConv2DDimension(const Conv2DParameters& params,
                               const Tensor& input, const Tensor& filter,
                               Conv2DDimensions* dimensions);
+
+using se::dnn::AlgorithmConfig;
+class ConvAutoTuneMap : public AutoTuneMap<ConvParameters, se::dnn::AlgorithmConfig> {
+ public:
+  ConvAutoTuneMap(const string& name)
+      : AutoTuneMap<ConvParameters, se::dnn::AlgorithmConfig>(name) {
+    const char* import_folder = getenv("TF_AUTOTUNE_IMPORT_PREFIX");
+    if (import_folder != nullptr) {
+      string autotune_import_file(import_folder);
+      string group_name = this->name_;
+      std::transform(group_name.cbegin(), group_name.cend(), group_name.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      autotune_import_file = autotune_import_file + "/" + group_name;
+      VLOG(1) << "Read conv autotune list from file: " << autotune_import_file;
+      string conv_autotune_list_str;
+      tensorflow::ReadFileToString(tensorflow::Env::Default(),
+                                   autotune_import_file,
+                                   &conv_autotune_list_str);
+      ConvAutoTuneList conv_autotune_list;
+      conv_autotune_list.ParseFromString(conv_autotune_list_str);
+      int autotune_size = conv_autotune_list.conv_params_size();
+      for (int idx = 0; idx < autotune_size; ++idx) {
+        this->params_config_map_.insert(std::make_pair(
+            ConvParameters{conv_autotune_list.conv_params().Get(idx)},
+            ValueType{conv_autotune_list.config().Get(idx),
+                      conv_autotune_list.score().Get(idx),
+                      conv_autotune_list.count().Get(idx)}));
+      }
+    }
+  }
+
+  ~ConvAutoTuneMap() {
+    const char* export_folder = getenv("TF_AUTOTUNE_EXPORT_PREFIX");
+    if (export_folder != nullptr) {
+      ConvAutoTuneList conv_autotune_list;
+      for (const auto& iter : this->params_config_map_) {
+        ConvParamsProto* conv_params = conv_autotune_list.add_conv_params();
+        *conv_params = iter.first.ToProto();
+        stream_executor::dnn::AlgorithmConfigProto* conv_algo_cfg = conv_autotune_list.add_config();
+        *conv_algo_cfg = iter.second.config.ToProto();
+        conv_autotune_list.add_score(iter.second.score);
+        conv_autotune_list.add_count(iter.second.count);
+      }
+      string conv_autotune_list_str;
+      conv_autotune_list.SerializeToString(&conv_autotune_list_str);
+      string autotune_export_file(export_folder);
+      string group_name = this->name_;
+      std::transform(group_name.cbegin(), group_name.cend(),
+                     group_name.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      autotune_export_file = autotune_export_file + "/" + group_name;
+      VLOG(1) << "Write conv autotune list to file: " << autotune_export_file;
+      tensorflow::WriteStringToFile(tensorflow::Env::Default(),
+                                    autotune_export_file,
+                                    conv_autotune_list_str);
+    }
+  }
+  
+  template <class Group>
+  friend class ConvAutoTuneSingleton;
+};
+
+template <class Group>
+class ConvAutoTuneSingleton {
+ public:
+  typedef ConvAutoTuneMap ConvAutoTuneType;
+  static ConvAutoTuneType* GetInstance() {
+    // Have to do this to enforce destructor of AutoTuneType for caching
+    struct EnableMakeShared : public ConvAutoTuneType {
+      EnableMakeShared(const string& name)
+          : ConvAutoTuneType(name) {}
+    };
+    static auto instance_ptr = std::static_pointer_cast<ConvAutoTuneType>(
+        std::make_shared<EnableMakeShared>(Group::name()));
+    return instance_ptr.get();
+  }
+};
+
 
 }  // namespace tensorflow
 

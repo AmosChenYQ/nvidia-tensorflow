@@ -2306,7 +2306,22 @@ tf_proto_library(
     cc_api_version = 2,
     make_default_target_header_only = True,
     protodeps = [
-        "//tensorflow/stream_executor:dnn_proto",
+        "//tensorflow/core:protos_all_proto",
+        "//tensorflow/stream_executor:dnn_proto"
+    ],
+    provide_cc_alias = True,
+    visibility = [
+        "//tensorflow:internal",
+    ],
+)
+
+tf_proto_library(
+    name = "matmul_autotuning_proto",
+    srcs = ["protobuf/matmul_autotuning.proto"],
+    cc_api_version = 2,
+    make_default_target_header_only = True,
+    protodeps = [
+        "//tensorflow/core:protos_all_proto",
     ],
     provide_cc_alias = True,
     visibility = [

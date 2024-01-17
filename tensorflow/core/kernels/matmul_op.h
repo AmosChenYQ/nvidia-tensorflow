@@ -19,7 +19,9 @@ limitations under the License.
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/tensor_types.h"
+#include "tensorflow/core/kernels/gpu_utils.h"
 #include "tensorflow/core/lib/hash/hash.h"
+#include "tensorflow/core/protobuf/matmul_autotuning.pb.h"
 
 #if defined(TENSORFLOW_USE_CUSTOM_CONTRACTION_KERNEL)
 #include "tensorflow/core/kernels/eigen_contraction_kernel.h"
@@ -71,14 +73,32 @@ class MatmulParameters {
         k_(k),
         dtype_(dtype),
         device_id_(device_id) {
-    hash_code_ = transa;
-    hash_code_ = Hash64Combine(hash_code_, transb);
-    hash_code_ = Hash64Combine(hash_code_, m);
-    hash_code_ = Hash64Combine(hash_code_, n);
-    hash_code_ = Hash64Combine(hash_code_, k);
-    hash_code_ = Hash64Combine(hash_code_, dtype);
-    hash_code_ = Hash64Combine(hash_code_, device_id);
+    UpdateHash();
   }
+
+  MatmulParameters(const MatmulParamsProto& proto) {
+    transa_ = proto.transa();
+    transb_ = proto.transb();
+    m_ = proto.m();
+    n_ = proto.n();
+    k_ = proto.k();
+    dtype_ = proto.dtype();
+    device_id_ = proto.device_id();
+    UpdateHash();
+  }
+
+  MatmulParamsProto ToProto() const {
+    MatmulParamsProto proto;
+    proto.set_transa(transa_);
+    proto.set_transb(transb_);
+    proto.set_m(m_);
+    proto.set_n(n_);
+    proto.set_k(k_);
+    proto.set_dtype(dtype_);
+    proto.set_device_id(device_id_);
+    return proto;
+  }
+
   bool operator==(const MatmulParameters& other) const {
     return this->get_data_as_tuple() == other.get_data_as_tuple();
   }
@@ -105,6 +125,16 @@ class MatmulParameters {
     return std::make_tuple(transa_, transb_, m_, n_, k_, dtype_, device_id_);
   }
 
+  void UpdateHash() {
+    hash_code_ = transa_;
+    hash_code_ = Hash64Combine(hash_code_, transb_);
+    hash_code_ = Hash64Combine(hash_code_, m_);
+    hash_code_ = Hash64Combine(hash_code_, n_);
+    hash_code_ = Hash64Combine(hash_code_, k_);
+    hash_code_ = Hash64Combine(hash_code_, dtype_);
+    hash_code_ = Hash64Combine(hash_code_, device_id_);
+  }
+
   bool transa_;
   bool transb_;
   uint64 m_;
@@ -116,6 +146,84 @@ class MatmulParameters {
 };
 
 typedef Eigen::GpuDevice GPUDevice;
+
+class MatmulAutoTuneMap
+    : public AutoTuneMap<MatmulParameters, se::blas::AlgorithmConfig> {
+ public:
+  MatmulAutoTuneMap(const string& name)
+      : AutoTuneMap<MatmulParameters, se::blas::AlgorithmConfig>(name) {
+    const char* import_folder = getenv("TF_AUTOTUNE_IMPORT_PREFIX");
+    if (import_folder != nullptr) {
+      string autotune_import_file{import_folder};
+      string group_name = this->name_;
+      std::transform(group_name.cbegin(), group_name.cend(), group_name.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      autotune_import_file = autotune_import_file + "/" + group_name;
+      VLOG(1) << "Read matmul autotune list from file: "
+              << autotune_import_file;
+      string matmul_autotune_list_str;
+      tensorflow::ReadFileToString(tensorflow::Env::Default(),
+                                   autotune_import_file,
+                                   &matmul_autotune_list_str);
+      MatmulAutoTuneList matmul_autotune_list;
+      matmul_autotune_list.ParseFromString(matmul_autotune_list_str);
+      int autotune_size = matmul_autotune_list.matmul_params_size();
+      for (int idx = 0; idx < autotune_size; ++idx) {
+        this->params_config_map_.insert(std::make_pair(
+            MatmulParameters{matmul_autotune_list.matmul_params().Get(idx)},
+            ValueType{se::blas::AlgorithmConfig{
+                          matmul_autotune_list.algorithm_type().Get(idx)},
+                      matmul_autotune_list.score().Get(idx),
+                      matmul_autotune_list.count().Get(idx)}));
+      }
+    }
+  }
+
+  ~MatmulAutoTuneMap() {
+    const char* export_folder = getenv("TF_AUTOTUNE_EXPORT_PREFIX");
+    if (export_folder != nullptr) {
+      MatmulAutoTuneList matmul_autotune_list;
+      for (const auto& iter : this->params_config_map_) {
+        MatmulParamsProto* matmul_params =
+            matmul_autotune_list.add_matmul_params();
+        *matmul_params = iter.first.ToProto();
+        matmul_autotune_list.add_algorithm_type(iter.second.config.algorithm());
+        matmul_autotune_list.add_score(iter.second.score);
+        matmul_autotune_list.add_count(iter.second.count);
+      }
+      string matmul_autotune_list_str;
+      matmul_autotune_list.SerializeToString(&matmul_autotune_list_str);
+      string autotune_export_file{export_folder};
+      string group_name = this->name_;
+      std::transform(group_name.cbegin(), group_name.cend(),
+                     group_name.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      autotune_export_file = autotune_export_file + "/" + group_name;
+      VLOG(1) << "Write matmul autotune list to file: " << autotune_export_file;
+      tensorflow::WriteStringToFile(tensorflow::Env::Default(),
+                                    autotune_export_file,
+                                    matmul_autotune_list_str);
+    }
+  }
+
+  template <class Group>
+  friend class MatmulAutoTuneSingleton;
+};
+
+template <class Group>
+class MatmulAutoTuneSingleton {
+ public:
+  typedef MatmulAutoTuneMap MatmulAutoTuneType;
+  static MatmulAutoTuneType* GetInstance() {
+    // Have to do this to enforce destructor of AutoTuneType for caching
+    struct EnableMakeShared : public MatmulAutoTuneType {
+      EnableMakeShared(const string& name) : MatmulAutoTuneType(name) {}
+    };
+    static auto instance_ptr = std::static_pointer_cast<MatmulAutoTuneType>(
+        std::make_shared<EnableMakeShared>(Group::name()));
+    return instance_ptr.get();
+  }
+};
 
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
