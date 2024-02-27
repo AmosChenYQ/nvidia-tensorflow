@@ -289,7 +289,7 @@ class MmapAllocator : public Allocator {
     if (access(tensor_file.c_str(), F_OK) == 0) {
       is_exist_on_mem_ = true;
     }
-    LOG(INFO) << "Try to open: " << tensor_file;
+    VLOG(1) << "Try to open: " << tensor_file;
     int shm_fd = open(tensor_file.c_str(), O_CREAT | O_RDWR, 0666);
     CHECK(shm_fd >= 0) << "Can not create shared memory segment.";
     CHECK(ftruncate(shm_fd, num_bytes) == 0) << "Can not configure the size file shared memory segment.";

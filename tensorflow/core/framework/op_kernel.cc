@@ -23,6 +23,7 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
+#include "tensorflow/core/framework/allocator_registry.h"
 #include "tensorflow/core/framework/allocation_description.pb.h"
 #include "tensorflow/core/framework/attr_value_util.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
@@ -679,6 +680,78 @@ Status OpKernelContext::allocate_output(int index, const TensorShape& shape,
   return allocate_output(index, shape, tensor, attr);
 }
 
+Status OpKernelContext::allocate_mmap_output(int index,
+                                             const TensorShape& shape,
+                                             Tensor** tensor,
+                                             std::size_t tensor_hash,
+                                             bool& is_exist_on_mem) {
+  if (index < 0) {
+    return errors::Internal("allocate_output with bad index=", index,
+                            " kernel=", params_->op_kernel->name());
+  }
+  if (index >= num_outputs()) {
+    return errors::Internal("allocate_output with bad index=", index,
+                            " num_outputs=", num_outputs(),
+                            " kernel=", params_->op_kernel->name());
+  }
+  bool forward_expected =
+      (params_->forward_from_array != nullptr && index >= 0 &&
+       params_->forward_from_array[index] >= 0);
+  if (forward_expected) {
+    return errors::Internal(
+        "Explicit allocate_output call where input forwarding required.  Try "
+        "turning off the ScopedAllocator optimizer.");
+  }
+  AllocatorAttributes attr = output_alloc_attr(index);
+  return allocate_mmap_output(index, shape, tensor, attr, tensor_hash, is_exist_on_mem);
+}
+
+Status OpKernelContext::allocate_mmap_output(
+    int index, const TensorShape& shape, Tensor** output,
+    AllocatorAttributes attr, std::size_t tensor_hash, bool& is_exist_on_mem) {
+  if (index < 0) {
+    return errors::Internal("allocate_output with bad index=", index,
+                            " kernel=", params_->op_kernel->name());
+  }
+  if (index >= num_outputs()) {
+    return errors::Internal("allocate_output with bad index=", index,
+                            " num_outputs=", outputs_.size(),
+                            " kernel=", params_->op_kernel->name());
+  }
+  const DataType type = params_->op_kernel->output_type(index);
+  if (IsRefType(type)) {
+    return errors::Internal("allocate_output with ref type. index=", index,
+                            " type=", type,
+                            " kernel=", params_->op_kernel->name());
+  }
+  if (mutable_output(index) != nullptr) {
+    return errors::Internal("allocate_output on same index multiple times.",
+                            " index = ", index,
+                            " mutable_output(index) = ", mutable_output(index),
+                            " kernel=", params_->op_kernel->name());
+  }
+  if (attr.scope_id > 0) {
+    maybe_initialize_scope_id_set();
+    if (!allocated_scope_ids_->insert(attr.scope_id).second) {
+      return errors::Internal(
+          "OpKernel ", params_->op_kernel->name(),
+          " called allocate_output at index ", index, " with scope_id ",
+          attr.scope_id,
+          " more than once.  Try turning off the ScopedAllocator optimizer.");
+    }
+  }
+  auto output_tensor = MakeUnique<Tensor>();
+  // TODO(AmosChenYQ): change allocate_tensor to allocate_mmap_tensor
+  // Status s = allocate_tensor(type, shape, output_tensor.get(), attr);
+  Status s = allocate_mmap_tensor(type, shape, output_tensor.get(), attr,
+                                  tensor_hash, is_exist_on_mem);
+  if (s.ok()) {
+    outputs_[index] = TensorValue(output_tensor.release());
+    *output = outputs_[index].tensor;
+  }
+  return s;
+}
+
 Status OpKernelContext::allocate_output(StringPiece name,
                                         const TensorShape& shape,
                                         Tensor** tensor) {
@@ -729,6 +802,35 @@ Status OpKernelContext::allocate_tensor(
   }
   record_tensor_reference(new_tensor);
   *out_tensor = std::move(new_tensor);
+  return Status::OK();
+}
+
+Status OpKernelContext::allocate_mmap_tensor(
+    DataType type, const TensorShape& shape, Tensor* out_tensor,
+    AllocatorAttributes attr, const AllocationAttributes& allocation_attr,
+    std::size_t tensor_hash, bool& is_exist_on_mem) {
+  // Allocator* a = get_allocator(attr);
+  // Try to get mmap allocator with tensor_hash
+  MmapAllocator* mmap_a 
+    = AllocatorFactoryRegistry::singleton()->GetMmapAllocator(tensor_hash);
+  Tensor new_tensor(mmap_a, type, shape,
+                    AllocationAttributes(allocation_attr.no_retry_on_failure,
+                                         /* allocation_will_be_logged= */ true,
+                                         allocation_attr.freed_by_func));
+
+  if (!new_tensor.IsInitialized()) {
+    return errors::ResourceExhausted(
+        "OOM when allocating tensor with shape", shape.DebugString(),
+        " and type ", DataTypeString(type), " on ", params_->device->name(),
+        " by allocator ", mmap_a->Name());
+  }
+  if (params_->log_memory) {
+    LogMemory::RecordTensorAllocation(params_->op_kernel->name(),
+                                      params_->step_id, new_tensor);
+  }
+  record_tensor_reference(new_tensor);
+  *out_tensor = std::move(new_tensor);
+  is_exist_on_mem = mmap_a->IsExistOnMem();
   return Status::OK();
 }
 

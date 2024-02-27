@@ -1011,6 +1011,14 @@ class OpKernelContext {
                          Tensor** tensor,
                          AllocatorAttributes attr) TF_MUST_USE_RESULT;
 
+  Status allocate_mmap_output(int index, const TensorShape& shape,
+                              Tensor** tensor, std::size_t tensor_hash,
+                              bool& is_exist_on_mem) TF_MUST_USE_RESULT;
+  Status allocate_mmap_output(int index, const TensorShape& shape,
+                              Tensor** tensor, AllocatorAttributes attr,
+                              std::size_t tensor_hash,
+                              bool& is_exist_on_mem) TF_MUST_USE_RESULT;
+
   // Allocates a temporary Tensor of the specified type and
   // shape. Devices such as GPUs that enqueue Ops for lazy execution
   // may retain references to the temporary tensors after the Op's
@@ -1288,6 +1296,7 @@ class OpKernelContext {
   }
 
   Allocator* get_allocator(AllocatorAttributes attr);
+  Allocator* get_mmap_allocator(std::size_t tensor_hash);
 
  private:
   bool record_memory_consumption_ = false;
@@ -1310,6 +1319,20 @@ class OpKernelContext {
   Status allocate_tensor(DataType type, const TensorShape& shape,
                          Tensor* out_tensor, AllocatorAttributes allocator_attr,
                          const AllocationAttributes& allocation_attr);
+
+  // Align with allocate_tensor
+  Status allocate_mmap_tensor(DataType type, const TensorShape& shape,
+                              Tensor* out_tensor,
+                              AllocatorAttributes allocator_attr, 
+                              std::size_t tensor_hash, bool& is_exist_on_mem) {
+    return allocate_mmap_tensor(type, shape, out_tensor, allocator_attr,
+                                AllocationAttributes(), tensor_hash, is_exist_on_mem);
+  }
+
+  Status allocate_mmap_tensor(DataType type, const TensorShape& shape,
+                              Tensor* out_tensor, AllocatorAttributes attr,
+                              const AllocationAttributes& allocation_attr,
+                              std::size_t tensor_hash, bool& is_exist_on_mem);
 
   // Initialize the allocated_scope_ids_ set the first time this method is
   // called.
