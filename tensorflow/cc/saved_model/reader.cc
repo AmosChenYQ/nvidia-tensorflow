@@ -80,8 +80,13 @@ Status ReadMetaGraphDefFromSavedModel(const string& export_dir,
                                       const std::unordered_set<string>& tags,
                                       MetaGraphDef* const meta_graph_def) {
   SavedModel saved_model_proto;
+  const uint64 read_saved_model_start = Env::Default()->NowMicros();
   TF_RETURN_IF_ERROR(ReadSavedModel(export_dir, &saved_model_proto));
+  const uint64 read_saved_model_end = Env::Default()->NowMicros();
+  LOG(INFO) << "Reading saved model from proto file takes " << static_cast<float>(read_saved_model_end - read_saved_model_start) / 1000 << "ms.";;
   TF_RETURN_IF_ERROR(FindMetaGraphDef(saved_model_proto, tags, meta_graph_def));
+  const uint64 find_meta_graph_def_end = Env::Default()->NowMicros();
+  LOG(INFO) << "Find MetaGraphDef takes " << static_cast<float>(find_meta_graph_def_end - read_saved_model_end) / 1000 << "ms.";;
   return Status::OK();
 }
 

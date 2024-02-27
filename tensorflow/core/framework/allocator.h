@@ -21,6 +21,12 @@ limitations under the License.
 #include <functional>
 #include <limits>
 
+#include <error.h>
+#include <fcntl.h>
+#include <mutex>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include "absl/strings/string_view.h"
 #include "absl/types/optional.h"
 #include "tensorflow/core/framework/numeric_types.h"
@@ -263,6 +269,49 @@ class AllocatorWrapper : public Allocator {
   Allocator* const wrapped_;
 };
 
+// This is a mmap cpu allocator for sharing tensor between different containers
+class MmapAllocator : public Allocator {
+ public:
+  explicit MmapAllocator(std::size_t tensor_hash) 
+    : tensor_hash_(tensor_hash), is_exist_on_mem_(false) { }
+
+  ~MmapAllocator() override { }
+
+  string Name() override { return "cpu_mmap"; }
+
+  bool IsExistOnMem() { return is_exist_on_mem_; }
+  
+  void* AllocateRaw(size_t alignment, size_t num_bytes) override {
+    // Format: export TF_ENABLE_MALLOC_ON_TMPFS=/root/tmpfs
+    const char* malloc_on_tmpfs = getenv("TF_ENABLE_MALLOC_ON_TMPFS");
+    string tmpfs_folder{malloc_on_tmpfs};
+    string tensor_file = tmpfs_folder + "/" + std::to_string(tensor_hash_);
+    if (access(tensor_file.c_str(), F_OK) == 0) {
+      is_exist_on_mem_ = true;
+    }
+    LOG(INFO) << "Try to open: " << tensor_file;
+    int shm_fd = open(tensor_file.c_str(), O_CREAT | O_RDWR, 0666);
+    CHECK(shm_fd >= 0) << "Can not create shared memory segment.";
+    CHECK(ftruncate(shm_fd, num_bytes) == 0) << "Can not configure the size file shared memory segment.";
+    void* p = mmap(0, num_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    CHECK(p != MAP_FAILED) << "Can not map shared memory segment to space of the process.";
+    CHECK(close(shm_fd) == 0);
+    return p;
+  }
+
+  void DeallocateRaw(void* ptr) override {
+    // Do not recycle any memory on mmap.
+    LOG(INFO) << "Deallocate tensor hash: " << tensor_hash_;
+    LOG(INFO) << "CPU mmap allocator doesn't support deallocate";
+  }
+
+ private:
+  std::size_t tensor_hash_;
+  bool is_exist_on_mem_;
+  std::mutex mutex_;
+  TF_DISALLOW_COPY_AND_ASSIGN(MmapAllocator);
+};
+
 // A tensorflow Op may need access to different kinds of memory that
 // are not simply a function of the device to which the Op has been
 // assigned.  For example, an Op executing on a GPU may still need
@@ -372,6 +421,8 @@ class SubAllocator {
   const std::vector<Visitor> alloc_visitors_;
   const std::vector<Visitor> free_visitors_;
 };
+
+
 
 }  // namespace tensorflow
 

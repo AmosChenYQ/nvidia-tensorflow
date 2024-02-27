@@ -87,6 +87,27 @@ Allocator* AllocatorFactoryRegistry::GetAllocator() {
   }
 }
 
+MmapAllocator* AllocatorFactoryRegistry::GetMmapAllocator(std::size_t tensor_hash) {
+  mutex_lock l(mu_);
+  first_alloc_made_ = true;
+  FactoryEntry* found_entry = nullptr;
+  for (auto& entry : factories_) {
+    if (entry.name == "DefaultCPUAllocator") {
+      found_entry = &entry;
+    }
+  }
+  if (found_entry) {
+    AllocatorFactory* cpu_allocator_factory = found_entry->factory.get();
+    if (!cpu_allocator_factory) {
+      LOG(FATAL) << "No registered CPU MmapAllocator";
+    }
+    return cpu_allocator_factory->CreateMmapAllocator(tensor_hash);
+  } else {
+    LOG(FATAL) << "No registered CPU MmapAllocator";
+    return nullptr;
+  }
+}
+
 SubAllocator* AllocatorFactoryRegistry::GetSubAllocator(int numa_node) {
   mutex_lock l(mu_);
   first_alloc_made_ = true;

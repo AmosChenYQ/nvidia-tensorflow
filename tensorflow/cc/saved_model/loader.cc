@@ -123,7 +123,7 @@ static Status ValidateSavedTensors(const GraphDef& graph_def) {
 
       // Also check that there is no recursivity in the library
       // TODO(mihaimaruseac): Do more than self-recursivity
-      TF_RETURN_IF_ERROR(ValidateFunctionNotRecursive(function));
+      TF_RETURN_IF_ERROR(ValidateFunctionNotRecursive(function)); 
     }
   }
 
@@ -134,9 +134,19 @@ Status LoadMetaGraphIntoSession(const MetaGraphDef& meta_graph_def,
                                 const SessionOptions& session_options,
                                 std::unique_ptr<Session>* session) {
   Session* session_p = nullptr;
+  const uint64 new_session_start_microseconds = Env::Default()->NowMicros();
   TF_RETURN_IF_ERROR(NewSession(session_options, &session_p));
+  const uint64 new_session_end_microseconds = Env::Default()->NowMicros();
+  VLOG(1) << "New session takes " << static_cast<float>(
+              new_session_end_microseconds - new_session_start_microseconds) / 1000 
+          << "ms";
   session->reset(session_p);
+  const uint64 validata_saved_tensor_start_microseconds = Env::Default()->NowMicros();
   TF_RETURN_IF_ERROR(ValidateSavedTensors(meta_graph_def.graph_def()));
+  const uint64 validate_saved_tensor_end_microseconds = Env::Default()->NowMicros();
+  VLOG(1) << "Validate saved tensors takes " << static_cast<float>(
+              validate_saved_tensor_end_microseconds - validata_saved_tensor_start_microseconds) / 1000 
+          << "ms";
   return (*session)->Create(meta_graph_def.graph_def());
 }
 
@@ -356,9 +366,14 @@ Status LoadSavedModelInternal(const SessionOptions& session_options,
     lsession_options.config.mutable_gpu_options()->clear_allocator_type();
   }
 
+  const uint64 load_meta_graph_into_sess_start_microseconds = Env::Default()->NowMicros();
   TF_RETURN_IF_ERROR(LoadMetaGraphIntoSession(
       bundle->meta_graph_def, lsession_options, &bundle->session));
-
+  const uint64 load_meta_graph_into_sess_end_microseconds = Env::Default()->NowMicros();
+  VLOG(1) << "Loading meta graph into session takes "
+          << static_cast<float>(load_meta_graph_into_sess_end_microseconds -
+                                load_meta_graph_into_sess_start_microseconds) / 1000
+          << "ms.";
 
   std::vector<AssetFileDef> asset_file_defs;
   TF_RETURN_IF_ERROR(
@@ -373,6 +388,8 @@ Status LoadSavedModelInternal(const SessionOptions& session_options,
   const uint64 restore_graph_walltime =
       GetLatencyMicroseconds(read_start_microseconds);
 
+  VLOG(1) << "Restoring graph takes " << static_cast<float>(restore_graph_walltime) / 1000 << "ms";
+
   const uint64 graph_init_start_microseconds = Env::Default()->NowMicros();
   string init_op_name;
   TF_RETURN_IF_ERROR(
@@ -383,8 +400,12 @@ Status LoadSavedModelInternal(const SessionOptions& session_options,
   load_latency_by_stage->GetCell(export_dir, "restore_graph")
       ->Add(restore_graph_walltime);
   // Record wall time spent in init op.
+  const uint64 init_graph_walltime = GetLatencyMicroseconds(graph_init_start_microseconds);
   load_latency_by_stage->GetCell(export_dir, "init_graph")
-      ->Add(GetLatencyMicroseconds(graph_init_start_microseconds));
+      ->Add(init_graph_walltime);
+
+  VLOG(1) << "Running init op takes " << static_cast<float>(init_graph_walltime) / 1000 << "ms";
+
   return Status::OK();
 }
 
@@ -401,7 +422,7 @@ Status LoadSavedModel(const SessionOptions& session_options,
   auto log_and_count = [&](const string& status_str) {
     LOG(INFO) << "SavedModel load for tags { " << absl::StrJoin(tags, " ")
               << " }; Status: " << status_str << ". Took "
-              << GetLatencyMicroseconds(start_microseconds) << " microseconds.";
+              << GetLatencyMicroseconds(start_microseconds) << " us";
     load_attempt_count->GetCell(export_dir, status_str)->IncrementBy(1);
   };
   if (status.ok()) {

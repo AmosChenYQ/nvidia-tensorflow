@@ -14,6 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include <atomic>
+#include <map>
 
 #include "tensorflow/core/framework/allocator.h"
 #include "tensorflow/core/framework/allocator_registry.h"
@@ -58,6 +59,7 @@ static int64_t TotalAllocationWarningBytes() {
   return value;
 }
 
+// The implementation of CPU allocator
 namespace {
 
 // A default Allocator for CPU devices.  ProcessState::GetCPUAllocator() will
@@ -147,6 +149,21 @@ class CPUAllocatorFactory : public AllocatorFactory {
  public:
   Allocator* CreateAllocator() override { return new CPUAllocator; }
 
+  MmapAllocator* CreateMmapAllocator(std::size_t tensor_hash) override {
+    // Use a global map to avoid creating too many allocators in one tensorflow
+    // process.
+    mutex_lock l(mu_);
+    static std::map<std::size_t, MmapAllocator*> mmap_allocator_store;
+    if (mmap_allocator_store.count(tensor_hash)) {
+      return mmap_allocator_store[tensor_hash];
+    }
+    MmapAllocator* mmap_allocator = new MmapAllocator(tensor_hash);
+    CHECK(mmap_allocator) << "Fail to create mmap allocator";
+    mmap_allocator_store.insert(
+        std::pair<std::size_t, MmapAllocator*>(tensor_hash, mmap_allocator));
+    return mmap_allocator;
+  }
+
   SubAllocator* CreateSubAllocator(int numa_node) override {
     return new CPUSubAllocator(new CPUAllocator);
   }
@@ -168,9 +185,54 @@ class CPUAllocatorFactory : public AllocatorFactory {
    private:
     CPUAllocator* cpu_allocator_;
   };
+   
+  mutex mu_;
 };
 
 REGISTER_MEM_ALLOCATOR("DefaultCPUAllocator", 100, CPUAllocatorFactory);
 }  // namespace
+
+// The implementation of CPU mmap allocator
+// namespace {
+
+// class MmapAllocatorFactory : public AllocatorFactory {
+//  public:
+//   Allocator* CreateAllocator() override {
+//     LOG(FATAL) << "CPU Mmap allocator factory can not create an allocator "
+//                   "without tensor hash";
+//     return nullptr;
+//   }
+
+//   Allocator* CreateAllocator(std::size_t tensor_hash) override {
+//     return new MmapAllocator(tensor_hash);
+//   }
+
+//   SubAllocator* CreateSubAllocator(int numa_node) override {
+//     return new CPUMmapSubAllocator(new MmapAllocator(0));
+//   }
+
+//  private:
+//   class CPUMmapSubAllocator : public SubAllocator {
+//    public:
+//     explicit CPUMmapSubAllocator(MmapAllocator* cpu_allocator)
+//         : SubAllocator({}, {}), cpu_allocator_(cpu_allocator) {}
+
+//     void* Alloc(size_t alignment, size_t num_bytes) override {
+//       return cpu_allocator_->AllocateRaw(alignment, num_bytes);
+//     }
+
+//     void Free(void* ptr, size_t num_bytes) override {
+//       cpu_allocator_->DeallocateRaw(ptr);
+//     }
+
+//    private:
+//     MmapAllocator* cpu_allocator_;
+//   };
+// };
+
+// We define MmapAllocatorFactory's priority as 10, but we will not use this priority
+// REGISTER_MEM_ALLOCATOR("MmapCPUAllocator", 10, MmapAllocatorFactory);
+
+// }
 
 }  // namespace tensorflow

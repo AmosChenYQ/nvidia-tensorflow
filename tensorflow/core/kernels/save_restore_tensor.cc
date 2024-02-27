@@ -278,14 +278,26 @@ struct RestoreOp {
     TF_RETURN_IF_ERROR(
         reader->LookupTensorShape(tensor_name, &restored_full_shape));
 
-    VLOG(1) << "Restoring tensor " << idx << " : " << tensor_name << " : "
-            << restored_full_shape.num_elements();
+    auto restore_tensor_start = std::chrono::steady_clock::now();
     Tensor* restored_tensor;
     if (shape_and_slice.empty()) {
+      // Format: export TF_ENABLE_MALLOC_ON_TMPFS=/root/tmpfs
+      const char* malloc_on_tmpfs = getenv("TF_ENABLE_MALLOC_ON_TMPFS");
       // Lookup the full tensor.
-      TF_RETURN_IF_ERROR(
+      if (!malloc_on_tmpfs) {
+        TF_RETURN_IF_ERROR(
           context->allocate_output(idx, restored_full_shape, &restored_tensor));
-      TF_RETURN_IF_ERROR(reader->Lookup(tensor_name, restored_tensor));
+        TF_RETURN_IF_ERROR(reader->Lookup(tensor_name, restored_tensor));
+      } else {
+        string tmpfs_folder{malloc_on_tmpfs};
+        std::size_t tensor_hash = std::hash<string>()(tensor_name);
+        bool is_exist_on_mem = false;
+        TF_RETURN_IF_ERROR(context->allocate_mmap_output(
+            idx, restored_full_shape, &restored_tensor, tensor_hash, is_exist_on_mem));
+        if (!is_exist_on_mem) {
+          TF_RETURN_IF_ERROR(reader->Lookup(tensor_name, restored_tensor));
+        }
+      }
     } else {
       // Lookup the slice.
       TensorShape parsed_full_shape;
@@ -308,6 +320,13 @@ struct RestoreOp {
       TF_RETURN_IF_ERROR(
           reader->LookupSlice(tensor_name, parsed_slice, restored_tensor));
     }
+    auto restore_tensor_end = std::chrono::steady_clock::now();
+    VLOG(1) << "Restoring tensor " << idx << " : " << tensor_name << " : "
+            << restored_full_shape.num_elements() << " took "
+            << std::chrono::duration<double, std::milli>(
+                   restore_tensor_end - restore_tensor_start)
+                   .count()
+            << "ms";
     return Status::OK();
   }
 
